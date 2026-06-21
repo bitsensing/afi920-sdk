@@ -1,0 +1,48 @@
+# Build output
+build/
+cmake-build-*/
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.venv
+# OS
+.DS_Store
+Thumbs.db
+
+# Internal development docs (not shipped to customers)
+.dev/
+
+# Runtime logs
+logs/
+
+# Tool caches
+.omc/
+.pytest_cache/
+.ruff_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Compiled objects
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+*.pdb
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
