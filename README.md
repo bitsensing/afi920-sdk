@@ -9,7 +9,7 @@
 C++ and Python SDK for the bitsensing **AFI920 4D Imaging Radar**.  
 Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, and key configuration APIs.
 
-> **Version 3.0.0** — tracks AFI920 protocol v3.0. Sensors running v3.0 firmware require this SDK; earlier sensors require SDK v2.x. See [CHANGELOG.md](CHANGELOG.md).
+> **Version 2.1.0** — supports AFI920 protocol v3.0 (Radar SW 3.0.0); use it with sensors running v3.0 firmware. See [CHANGELOG.md](CHANGELOG.md).
 
 > **bitsensing** — [bitsensing.com](https://bitsensing.com)
 
@@ -247,7 +247,7 @@ pip install -e .
 Verify installation:
 ```bash
 python -c "import afi_sdk; print(afi_sdk.__version__)"
-# Output: 3.0.0
+# Output: 2.1.0
 ```
 
 ---

@@ -15,8 +15,8 @@ import sys
 from afi_sdk import AfiSdk, AfiSdkConfig, RangeMode
 
 
-# Port offsets per sensor (sensor 0 uses defaults, sensor 1 uses +10, etc.)
-PORT_OFFSET_PER_SENSOR = 10
+# Port offsets per sensor (sensor 0 uses defaults, sensor 1 uses +100, etc.)
+PORT_OFFSET_PER_SENSOR = 100
 
 # Default data ports
 BASE_RDI_PORT = 30509

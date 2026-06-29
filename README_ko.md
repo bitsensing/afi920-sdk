@@ -9,7 +9,7 @@
 bitsensing **AFI920 4D Imaging Radar**용 C++ 및 Python SDK입니다.  
 AFI920 센서를 탐색하고, RDI/SHII/SPI 데이터를 수신하고, CSII 차량 정보를 송신하며, 주요 설정 API를 사용할 수 있도록 구성했습니다.
 
-> **Version 3.0.0** — AFI920 프로토콜 v3.0 기준입니다. v3.0 펌웨어 센서는 이 SDK가 필요하며, 이전 센서는 SDK v2.x를 사용하세요. [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
+> **Version 2.1.0** — AFI920 프로토콜 v3.0(Radar SW 3.0.0)을 지원합니다. v3.0 펌웨어 센서에 사용하세요. [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
 
 > **bitsensing** — [bitsensing.com](https://bitsensing.com)
 
@@ -247,7 +247,7 @@ pip install -e .
 설치 확인:
 ```bash
 python -c "import afi_sdk; print(afi_sdk.__version__)"
-# 출력: 3.0.0
+# 출력: 2.1.0
 ```
 
 ---

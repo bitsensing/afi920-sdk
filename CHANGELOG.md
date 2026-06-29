@@ -4,21 +4,16 @@ All notable changes to the AFI920 SDK will be documented in this file.
 
 ---
 
-## v3.0.0 — Protocol v3.0
+## v2.1.0 — Protocol v3.0
 
-Major release tracking the AFI920 protocol v3.0. **Breaking** — the wire
-format and the public API both change; sensors running v3.0 firmware
-require this SDK, and earlier sensors require SDK v2.x.
+Release tracking the AFI920 protocol v3.0. **Breaking** — the wire
+format and the public API both change; this SDK targets sensors running
+v3.0 firmware (Radar SW 3.0.0).
 
 ### Breaking Changes
 
 - **Config API method IDs renumbered** — categories now occupy 10-unit
-  blocks (`0x0010`–`0x00A6`). Removed APIs: standby/update-cycle/EOL mode,
-  per-stream port methods, host network config, monitoring (temperature,
-  power, noise, interference, load, operation log), vehicle info source,
-  PTP diagnostics/lock offset, firmware/hardware/driver version getters,
-  field-of-view, ghost/multipath filter, blockage detection, legacy
-  `UpdateFirmware`.
+  blocks. Several legacy methods were removed or consolidated.
 - **E2E protection (AUTOSAR Profile 7)** — every RDI/SHII/SPI payload now
   carries a 20-byte E2E header (CRC-64/XZ). The SDK verifies the CRC on
   receive (`validate_e2e`, default on; `e2e_strict` drops bad frames).
@@ -32,7 +27,7 @@ require this SDK, and earlier sensors require SDK v2.x.
 - **SPI layout** — pose 48 B → 32 B (origin point errors and roll error
   removed); blockage status adds `UNKNOWN`.
 - **Operation mode → Range mode** — `Get/SetRangeMode` with
-  DR/LR/MR/SR + new ULR/USR. EOL entry moved to `SetFactoryMode`.
+  DR/LR/MR/SR + new ULR/USR.
 - **Unified network config** — `Get/SetNetworkConfig` covers the radar's
   own network and all stream destinations (partial update; per-stream
   helper `SetStreamDestination`).
@@ -42,8 +37,6 @@ require this SDK, and earlier sensors require SDK v2.x.
   per-fault source/level/active).
 - **PTP** — live sync status merged into `GetPtpConfig`; `SetPtpConfig`
   takes only the profile.
-- **Firmware update** — OTA methods moved to `0x0080`–`0x0087`;
-  `GetBootInfo` fields renamed to driver/firmware slots.
 - **Discovery** — response fields follow the new version/range-mode scheme;
   sensors reply with unicast + limited broadcast and the SDK deduplicates.
 
@@ -53,9 +46,7 @@ require this SDK, and earlier sensors require SDK v2.x.
   `send_vehicle_input()` publishes vehicle dynamics to the sensor over
   TCP 30501 (Event `0x8001`, E2E-protected 115 B frame).
 - **Detection filters** — nine toggles including the new APS noise filter.
-- **Detection density** — range/angle measurement augmentation toggles.
-- **Factory domain** — factory data, factory mode (normal/evaluation/EOL)
-  and calibration APIs under `0x00A0`–`0x00A6`.
+- **Detection density** — range/angle peak-density toggles.
 - **Python `afi_sdk.streams`** — E2E parse/build (KAT-verified CRC-64/XZ),
   RDI/SHII/SPI parsers, CSII frame builder.
 

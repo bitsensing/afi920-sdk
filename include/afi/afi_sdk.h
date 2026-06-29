@@ -25,7 +25,7 @@
  * @code
  *   afi::AfiSdk sdk1, sdk2;
  *   config1.sensor_ip = "192.168.10.150"; config1.rdi_port = 30509;
- *   config2.sensor_ip = "192.168.10.151"; config2.rdi_port = 30519;
+ *   config2.sensor_ip = "192.168.10.151"; config2.rdi_port = 30609;
  *   sdk1.Init(config1); sdk2.Init(config2);
  * @endcode
  *

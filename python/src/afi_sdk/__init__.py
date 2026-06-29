@@ -25,7 +25,7 @@ Copyright (c) 2026 bitsensing Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 """
 
-__version__ = "3.0.0"
+__version__ = "2.1.0"
 
 from afi_sdk._sdk import (
     AfiSdk,
