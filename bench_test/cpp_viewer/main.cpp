@@ -76,6 +76,11 @@ int main(int argc, char* argv[]) {
     QSurfaceFormat::setDefaultFormat(fmt);
 
     QApplication app(argc, argv);
+    // Don't let Qt auto-quit on "last window closed": while the QOpenGLWidget
+    // realizes its native window at startup, the visible-window count can dip
+    // to zero for a frame and trip an immediate quit. We quit explicitly from
+    // MainWindow::closeEvent instead.
+    app.setQuitOnLastWindowClosed(false);
     viewer::MainWindow win(std::move(args));
     win.show();
     return app.exec();

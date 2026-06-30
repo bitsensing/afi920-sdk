@@ -450,6 +450,9 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     recCtrl_.stop();
     stopSource();
     QMainWindow::closeEvent(e);
+    // We disabled quitOnLastWindowClosed (see main.cpp), so closing the main
+    // window must quit the app explicitly.
+    QApplication::quit();
 }
 
 }  // namespace viewer

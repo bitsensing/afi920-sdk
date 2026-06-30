@@ -8,6 +8,8 @@ cmake-build-*/
 *.swo
 *~
 .venv
+# Per-machine bench_test overrides (host-specific paths)
+bench_test/_env.local.sh
 # OS
 .DS_Store
 Thumbs.db
