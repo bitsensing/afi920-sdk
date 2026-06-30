@@ -1,0 +1,47 @@
+{
+  "kind": "live",
+  "transport": "tcp",
+  "started_unix": 1782794835.667684,
+  "sensors": [
+    {
+      "index": 0,
+      "ip": "192.168.10.150",
+      "pose": {
+        "offset_x_m": 0.0,
+        "offset_y_m": 0.0,
+        "offset_z_m": 0.0,
+        "yaw_deg": 0.0,
+        "pitch_deg": 0.0,
+        "roll_deg": 0.0
+      },
+      "device_info": {}
+    },
+    {
+      "index": 1,
+      "ip": "192.168.10.151",
+      "pose": {
+        "offset_x_m": 0.0,
+        "offset_y_m": 0.0,
+        "offset_z_m": 0.0,
+        "yaw_deg": 0.0,
+        "pitch_deg": 0.0,
+        "roll_deg": 0.0
+      },
+      "device_info": {}
+    },
+    {
+      "index": 2,
+      "ip": "192.168.10.152",
+      "pose": {
+        "offset_x_m": 0.0,
+        "offset_y_m": 0.0,
+        "offset_z_m": 0.0,
+        "yaw_deg": 0.0,
+        "pitch_deg": 0.0,
+        "roll_deg": 0.0
+      },
+      "device_info": {}
+    }
+  ],
+  "record_count": 96
+}
