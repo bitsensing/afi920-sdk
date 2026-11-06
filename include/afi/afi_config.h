@@ -72,10 +72,21 @@ struct AfiSdkConfig {
     // v1.0.2 additions are appended to preserve the order and offsets of the
     // original public members for existing aggregate-style callers.
 
+    /// Port for PMOI (Potentially Moving Object Interface)
+    uint16_t pmoi_port = 30512;
+
     /// Optional per-stream transport overrides (empty = stream_transport)
     std::string rdi_transport;
     std::string shi_transport;
     std::string spi_transport;
+    std::string pmoi_transport;
+
+    /// Enable PMOI data stream reception. Interface v1.1.0 reserves PMOI and
+    /// the radar does not send it; set this only when Discovery reports the
+    /// endpoint (AfiSensorInfo::has_objects), taking pmoi_port from
+    /// objects_port. An unavailable PMOI endpoint is logged and disables only
+    /// PMOI; Init() still succeeds for the other streams.
+    bool enable_pmoi = false;
 
     /// CSII transport: empty picks it from the sensor's interface generation
     /// (UDP on v1.1.0, TCP on v1.0.x, UDP while unknown); "udp" or "tcp"

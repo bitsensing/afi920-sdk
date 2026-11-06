@@ -11,6 +11,21 @@ Release tracking the AFI920 interface v1.1.0 (sensor firmware v3.1.1).
 public API change. Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0)
 remain supported for data reception in this release only.
 
+### PMOI test build (branch `feature/lsad_test`)
+
+This branch also receives PMOI (Potentially Moving Objects, Event `0x8005`)
+from sensors that send it, such as firmware 3.1.0, whose Discovery reports
+`objects_port`. Interface v1.1.0 (firmware 3.1.1) does not send PMOI.
+
+- C++: set `AfiSdkConfig::enable_pmoi` and `pmoi_port` (from Discovery
+  `objects_port`), and register the `AfiPmoiFrame` callback; the
+  wire-payload callback reports `AfiStreamKind::kObjects`. An unavailable
+  PMOI endpoint disables only PMOI.
+- Python: `AfiSdkConfig.pmoi_port`, `EVENT_PMOI`, `DEFAULT_PMOI_PORT`,
+  `E2E_DATA_ID_PMOI`, `streams.parse_pmoi_frame()` /
+  `parse_pmoi_object()`.
+- `test/test_data_receive` takes `pmoi[=PORT]` to receive PMOI as well.
+
 ### Breaking Changes
 
 - **E2E CRC-32** — the 20-byte E2E header keeps its layout but carries an

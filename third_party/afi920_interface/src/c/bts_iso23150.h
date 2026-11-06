@@ -53,6 +53,7 @@ typedef enum {
 #define BTS_SOMEIP_EVENT_RDI            (0x8002u)
 #define BTS_SOMEIP_EVENT_SHII           (0x8003u)
 #define BTS_SOMEIP_EVENT_SPI            (0x8004u)
+#define BTS_SOMEIP_EVENT_PMOI           (0x8005u)
 
 /* Protocol constants */
 #define BTS_SOMEIP_PROTOCOL_VERSION     (0x01u)

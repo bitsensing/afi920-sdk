@@ -7,6 +7,7 @@ add_library(afi_sdk STATIC
     protocol/e2e.cpp
     protocol/csii_builder.cpp
     protocol/rdi_parser.cpp
+    protocol/pmoi_parser.cpp
     protocol/shi_parser.cpp
     protocol/spi_parser.cpp
     transport/udp_receiver.cpp
@@ -28,6 +29,7 @@ set(AFI_INTERFACE_HEADERS
     AFI920/bts_iso23150_shi.h
     AFI920/bts_iso23150_spi.h
     AFI920/bts_iso23150_csii.h
+    AFI920/bts_iso23150_pmoi.h
 )
 
 target_include_directories(afi_sdk

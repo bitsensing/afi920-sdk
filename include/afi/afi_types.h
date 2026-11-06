@@ -22,6 +22,7 @@
 #include "AFI920/bts_iso23150_shi.h"
 #include "AFI920/bts_iso23150_spi.h"
 #include "AFI920/bts_iso23150_csii.h"
+#include "AFI920/bts_iso23150_pmoi.h"
 
 namespace afi {
 
@@ -163,6 +164,68 @@ struct AfiStreamMeta {
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
 };
 
+/**
+ * @brief PMOI frame with SDK-owned object storage
+ *
+ * The `objects` pointer in `message` points into `objects_storage`. Copying or
+ * moving the frame safely rebinds the pointer to the destination frame's
+ * storage.
+ */
+struct AfiPmoiFrame {
+    bts_pmoi_message_t message{};         ///< Deserialized PMOI message
+    uint64_t           recv_timestamp_ns = 0; ///< Host receive timestamp (steady clock)
+    uint32_t           frame_seq = 0;     ///< SDK internal frame sequence number
+    std::vector<bts_pmoi_object_t> objects_storage; ///< Object storage
+
+    AfiPmoiFrame() = default;
+
+    AfiPmoiFrame(const AfiPmoiFrame& other)
+        : message(other.message),
+          recv_timestamp_ns(other.recv_timestamp_ns),
+          frame_seq(other.frame_seq),
+          objects_storage(other.objects_storage) {
+        RebindStorage();
+    }
+
+    AfiPmoiFrame& operator=(const AfiPmoiFrame& other) {
+        if (this != &other) {
+            message = other.message;
+            recv_timestamp_ns = other.recv_timestamp_ns;
+            frame_seq = other.frame_seq;
+            objects_storage = other.objects_storage;
+            RebindStorage();
+        }
+        return *this;
+    }
+
+    AfiPmoiFrame(AfiPmoiFrame&& other) noexcept
+        : message(other.message),
+          recv_timestamp_ns(other.recv_timestamp_ns),
+          frame_seq(other.frame_seq),
+          objects_storage(std::move(other.objects_storage)) {
+        RebindStorage();
+        other.RebindStorage();
+    }
+
+    AfiPmoiFrame& operator=(AfiPmoiFrame&& other) noexcept {
+        if (this != &other) {
+            message = other.message;
+            recv_timestamp_ns = other.recv_timestamp_ns;
+            frame_seq = other.frame_seq;
+            objects_storage = std::move(other.objects_storage);
+            RebindStorage();
+            other.RebindStorage();
+        }
+        return *this;
+    }
+
+    /// Rebind after directly modifying objects_storage.
+    void RebindStorage() noexcept {
+        message.objects = objects_storage.empty()
+            ? nullptr : objects_storage.data();
+    }
+};
+
 // ─── Enums ───
 
 /**
@@ -283,6 +346,14 @@ struct AfiSensorInfo {
     std::string ptp_state;             ///< "INIT" / "SLAVE" / "MASTER"
     int64_t     ptp_offset_ns = 0;
 
+    /// PMOI destination (Event 0x8005). Interface v1.1.0 reserves PMOI and
+    /// the radar omits these keys. has_objects is true only when the response
+    /// carries objects_port; enable PMOI reception (enable_pmoi) only then.
+    bool        has_objects = false;
+    uint16_t    objects_port = 0;
+    std::string objects_protocol;
+    std::string objects_ip;
+
     /// Interface generation from the response keys: driver_hash exists only
     /// on v1.0.x, the m72_* keys only on v1.1.0.
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
@@ -359,12 +430,13 @@ enum class AfiStreamKind : uint8_t {
     kDetection = 0,    ///< RDI
     kHealth = 1,       ///< SHII
     kPerformance = 2,  ///< SPI
+    kObjects = 3,      ///< PMOI (wire prefix: objects)
 };
 
 /**
  * @brief Parser-independent, reassembled stream payload.
  *
- * For RDI/SHII/SPI, `payload` starts at the 20-byte E2E header and
+ * For RDI/SHII/SPI/PMOI, `payload` starts at the 20-byte E2E header and
  * contains the complete ISO 23150 payload that follows it.  The callback is
  * emitted after SOME/IP validation, TP reassembly, and E2E verification, but
  * before the version-specific domain parser.  A failed E2E check does not
@@ -403,6 +475,7 @@ struct AfiNetworkConfig {
     AfiStreamDestination detection;     ///< RDI (sensor registry port 30509)
     AfiStreamDestination health;        ///< SHII (sensor registry port 30510)
     AfiStreamDestination performance;   ///< SPI (sensor registry port 30511)
+    AfiStreamDestination objects;       ///< PMOI. Not defined on interface v1.1.0; never sent
 };
 
 // Category 4: Detection (0x004x)

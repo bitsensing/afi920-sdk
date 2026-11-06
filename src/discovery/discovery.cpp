@@ -180,6 +180,10 @@ int Discovery::ParseResponse(const uint8_t* data, size_t len, AfiSensorInfo& out
         if (d.contains("detection_port"))     out.detection_port = d["detection_port"].get<uint16_t>();
         if (d.contains("health_port"))        out.health_port = d["health_port"].get<uint16_t>();
         if (d.contains("performance_port"))   out.performance_port = d["performance_port"].get<uint16_t>();
+        out.has_objects = d.contains("objects_port");
+        if (out.has_objects)                  out.objects_port = d["objects_port"].get<uint16_t>();
+        if (d.contains("objects_protocol"))   out.objects_protocol = d["objects_protocol"].get<std::string>();
+        if (d.contains("objects_ip"))         out.objects_ip = d["objects_ip"].get<std::string>();
 
         // Data stream protocols
         if (d.contains("detection_protocol"))    out.detection_protocol = d["detection_protocol"].get<std::string>();

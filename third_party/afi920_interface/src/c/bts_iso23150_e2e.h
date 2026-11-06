@@ -74,6 +74,7 @@ extern "C" {
 #define BTS_E2E_DATA_ID_RDI             (0x60008002u)
 #define BTS_E2E_DATA_ID_SHII            (0x60008003u)
 #define BTS_E2E_DATA_ID_SPI             (0x60008004u)
+#define BTS_E2E_DATA_ID_PMOI            (0x60008005u)
 
 /*============================================================================
  * CRC-32 (nibble table, LSB-first)

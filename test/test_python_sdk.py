@@ -77,13 +77,16 @@ def make_sdk():
     return sdk
 
 
-def test_config_positional_order():
+def test_config_has_pmoi_port():
+    assert AfiSdkConfig().pmoi_port == 30512
+
     legacy = AfiSdkConfig(
         "127.0.0.1", 30000, 30001, 30002, 30003, 30004, 0.25, "udp", False)
     assert legacy.spi_port == 30004
     assert legacy.timeout == 0.25
     assert legacy.stream_transport == "udp"
     assert legacy.validate_e2e is False
+    assert legacy.pmoi_port == 30512
 
 
 def test_stream_destination_keys_match_v110():
@@ -94,6 +97,10 @@ def test_stream_destination_keys_match_v110():
         {"detection_ip": "192.168.10.100", "detection_port": 30509,
          "detection_protocol": "udp"},
     )
+    # v1.1.0 defines no objects_* keys (02_Network.md 02.2).
+    calls = len(sdk._client.calls)
+    assert sdk.set_stream_destination("objects", "192.168.10.100", 30512, "udp") == INVALID_PARAM
+    assert len(sdk._client.calls) == calls
     assert sdk.set_stream_destination("unknown", "127.0.0.1", 1) == INVALID_PARAM
 
 
@@ -176,6 +183,23 @@ def test_set_mode_reports_radar_refusals():
     assert sdk.set_mode(AccessMode.PROGRAMMING) == SESSION_REQUIRED
     assert sdk.set_mode(AccessMode.DIAGNOSTIC) == OK
     assert sdk.set_mode(AccessMode.DIAGNOSTIC) == ACCESS_DENIED
+
+
+def test_set_network_config_drops_objects_keys():
+    import warnings
+    sdk = make_sdk()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        sdk.set_network_config(detection_protocol="udp", objects_ip="1.2.3.4",
+                               objects_port=30512)
+    assert sdk._client.calls[-1] == (METHOD_SET_NETWORK_CONFIG,
+                                     {"detection_protocol": "udp"})
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    calls = len(sdk._client.calls)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert sdk.set_network_config(objects_port=30512) is None
+    assert len(sdk._client.calls) == calls
 
 
 def test_config_client_e2e_loopback():

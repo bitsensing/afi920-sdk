@@ -151,6 +151,7 @@ def test_e2e_data_ids():
     assert streams.E2E_DATA_ID_RDI == 0x60008002
     assert streams.E2E_DATA_ID_SHII == 0x60008003
     assert streams.E2E_DATA_ID_SPI == 0x60008004
+    assert streams.E2E_DATA_ID_PMOI == 0x60008005
     assert streams.e2e_data_id(0x0020) == 0x60000020
     assert streams.e2e_data_id(0x00E1) == 0x600000E1
 
@@ -287,6 +288,97 @@ def test_rdi_udp_sender_matches_current_wire_contract():
         protected, expected_data_id=streams.E2E_DATA_ID_RDI)
     assert e2e["crc_ok"] and e2e["counter"] == 8
     assert iso == large_payload
+
+
+# ── PMOI ──
+
+def _make_pmoi(n: int) -> bytes:
+    buf = bytearray(streams.PMOI_HEADER_SIZE + n * streams.PMOI_OBJECT_SIZE)
+    buf[0] = 1
+    buf[3] = 0x02
+    buf[4] = 1
+    buf[5] = 4
+    struct.pack_into("<Q", buf, 6, 9876543210)
+    struct.pack_into("<I", buf, 14, 77)
+    struct.pack_into("<I", buf, 18, 100_000_000)
+    buf[24] = 0
+    struct.pack_into("<H", buf, 25, streams.PMOI_MAX_OBJECTS)
+    buf[27] = 1
+    struct.pack_into("<H", buf, 28, n)
+    for i in range(n):
+        off = streams.PMOI_HEADER_SIZE + i * streams.PMOI_OBJECT_SIZE
+        struct.pack_into("<f", buf, off, 95.0)
+        buf[off + 4] = 10 + i
+        buf[off + 5] = 2
+        struct.pack_into("<f", buf, off + 6, 1.25)
+        buf[off + 10] = 0
+        buf[off + 11] = 2
+        buf[off + 12:off + 16] = bytes([0, 80, 1, 20])
+        buf[off + 22] = 1
+        struct.pack_into("<22f", buf, off + 23,
+                         *(float(v) + 0.5 for v in range(22)))
+        buf[off + 111] = 0
+        struct.pack_into("<f", buf, off + 112, 12.5)
+    return bytes(buf)
+
+
+def test_pmoi_layout_and_parse():
+    assert streams.PMOI_HEADER_SIZE == 30
+    assert streams.PMOI_OBJECT_SIZE == 116
+    assert streams.PMOI_MAX_OBJECTS == 255
+    assert streams.PMOI_MAX_PAYLOAD_SIZE == 30 + 255 * 116
+
+    payload = _make_pmoi(2)
+    hdr = streams.parse_pmoi_frame(payload)
+    assert hdr["interface_id"] == 0x02
+    assert hdr["version"] == (1, 0, 0)
+    assert hdr["num_serving_sensors"] == 1
+    assert hdr["sensor_id"] == 4
+    assert hdr["timestamp"] == 9876543210
+    assert hdr["message_counter"] == 77
+    assert hdr["interface_cycle_time"] == 100_000_000
+    assert hdr["motion_type"] == 0
+    assert hdr["objects_capability"] == 255
+    assert hdr["objects_status"] == 1
+    assert hdr["num_objects"] == 2
+
+    obj = streams.parse_pmoi_object(payload, hdr["object_start"], 0)
+    assert obj["existence_probability"] == 95.0
+    assert obj["object_id"] == 10
+    assert obj["object_grouping_id"] == 2
+    assert obj["age"] == 1.25
+    assert obj["measurement_status"] == 0
+    assert obj["num_classifications"] == 2
+    assert obj["classifications"] == [
+        {"type": 0, "confidence": 80},
+        {"type": 1, "confidence": 20},
+    ]
+    assert obj["reference_point"] == 1
+    float_fields = (
+        "position_x", "position_y", "position_z",
+        "position_error_x", "position_error_y", "position_error_z",
+        "orientation_yaw",
+        "bounding_box_length", "bounding_box_width", "bounding_box_height",
+        "velocity_x", "velocity_y", "velocity_z",
+        "velocity_error_x", "velocity_error_y", "velocity_error_z",
+        "acceleration_x", "acceleration_y", "acceleration_z",
+        "acceleration_error_x", "acceleration_error_y",
+        "acceleration_error_z",
+    )
+    for index, field in enumerate(float_fields):
+        assert abs(obj[field] - (index + 0.5)) < 1e-6
+    assert obj["movement_status"] == 0
+    assert obj["radar_cross_section"] == 12.5
+
+
+def test_pmoi_malformed_rejected():
+    assert streams.parse_pmoi_frame(b"\x00" * 29) is None
+    assert streams.parse_pmoi_frame(_make_pmoi(1)[:-1]) is None
+    payload = bytearray(_make_pmoi(1))
+    payload[streams.PMOI_HEADER_SIZE + 11] = 6
+    hdr = streams.parse_pmoi_frame(payload)
+    assert hdr is not None
+    assert streams.parse_pmoi_object(payload, hdr["object_start"], 0) is None
 
 
 # ── SHII (variable length) ──

@@ -27,6 +27,7 @@ int main(int argc, char* argv[]) {
         printf("    range_mode=%s(%d) ports: det=%d shi=%d spi=%d",
                s.range_mode_name.c_str(), static_cast<int>(s.range_mode),
                s.detection_port, s.health_port, s.performance_port);
+        if (s.has_objects) printf(" pmoi=%d", s.objects_port);
         printf("\n");
         printf("    scan_index=%u uptime=%us ptp=%s\n",
                s.scan_index, s.uptime_seconds, s.ptp_state.c_str());

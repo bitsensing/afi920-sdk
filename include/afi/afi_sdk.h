@@ -3,7 +3,7 @@
  * @brief AFI920 4D Imaging Radar SDK
  *
  * Main facade class for interacting with AFI920 sensors.
- * Provides data streaming (RDI/SHII/SPI), sensor discovery,
+ * Provides data streaming (RDI/SHII/SPI/PMOI), sensor discovery,
  * and configuration API.
  *
  * Usage:
@@ -116,6 +116,16 @@ public:
     void RegRecvCallback(std::function<void(const AfiSpiMessage&, const AfiStreamMeta&)> cb);
 
     /**
+     * @brief Register PMOI (Potentially Moving Object Interface) callback
+     * @param cb Called for each PMOI frame (from receiver thread)
+     *
+     * Needs AfiSdkConfig::enable_pmoi. Sensors that send PMOI (Event 0x8005)
+     * report objects_port in Discovery; interface v1.1.0 (FW v3.1.1) reserves
+     * the event and does not send it.
+     */
+    void RegRecvCallback(std::function<void(const AfiPmoiFrame&)> cb);
+
+    /**
      * @brief Register the RDI send-slot loss callback
      *
      * Loss is counted from gaps in the RDI E2E Counter, which advances once
@@ -133,7 +143,7 @@ public:
     /**
      * @brief Register a parser-independent wire-payload callback.
      *
-     * The callback receives reassembled RDI, SHII, and SPI payloads
+     * The callback receives reassembled RDI, SHII, SPI, and PMOI payloads
      * before their version-specific parsers run. E2E is verified but
      * never used to drop a frame (unless e2e_strict is set); the result is in
      * AfiWirePayloadFrame::e2e_valid. TCP receive sizing and TP reassembly

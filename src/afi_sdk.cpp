@@ -72,6 +72,7 @@ void AfiSdk::RegRecvCallback(std::function<void(const AfiShiMessage&)> cb) { imp
 void AfiSdk::RegRecvCallback(std::function<void(const AfiSpiMessage&)> cb) { impl_->spi_cb_ = std::move(cb); }
 void AfiSdk::RegRecvCallback(std::function<void(const AfiShiMessage&, const AfiStreamMeta&)> cb) { impl_->shi_meta_cb_ = std::move(cb); }
 void AfiSdk::RegRecvCallback(std::function<void(const AfiSpiMessage&, const AfiStreamMeta&)> cb) { impl_->spi_meta_cb_ = std::move(cb); }
+void AfiSdk::RegRecvCallback(std::function<void(const AfiPmoiFrame&)> cb) { impl_->pmoi_cb_ = std::move(cb); }
 void AfiSdk::RegRecvCallback(std::function<void(uint32_t, uint32_t)> cb) { impl_->loss_cb_ = std::move(cb); }
 void AfiSdk::RegWirePayloadCallback(
     std::function<void(const AfiWirePayloadFrame&)> cb) {
@@ -206,9 +207,15 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
             spi_tcp_->Close();
             spi_tcp_.reset();
         }
+        if (pmoi_tcp_) {
+            pmoi_tcp_->SetStopping();
+            pmoi_tcp_->Close();
+            pmoi_tcp_.reset();
+        }
         rdi_udp_.Close();
         shi_udp_.Close();
         spi_udp_.Close();
+        pmoi_udp_.Close();
         csii_sender_.Disconnect();
         csii_tcp_.Disconnect();
         tcp_client_.Disconnect();
@@ -232,7 +239,10 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
                            "SHII", shi_use_tcp_)) ||
         (config_.enable_spi &&
          !ResolveTransport(config_.stream_transport, config_.spi_transport,
-                           "SPI", spi_use_tcp_))) {
+                           "SPI", spi_use_tcp_)) ||
+        (config_.enable_pmoi &&
+         !ResolveTransport(config_.stream_transport, config_.pmoi_transport,
+                           "PMOI", pmoi_use_tcp_))) {
         return fail_init(kInvalidParam);
     }
 
@@ -295,9 +305,33 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
             return fail_init(kConnectFailed);
         }
     }
+    // PMOI (0x8005) is reserved on interface v1.1.0 and FW v3.1.1 does not
+    // send it. An unavailable PMOI endpoint disables only PMOI; Init continues
+    // so the other streams are received.
+    pmoi_active_ = false;
+    if (config_.enable_pmoi) {
+        AFI_LOG_WARN("PMOI is reserved on interface v1.1.0; enable it only when "
+                     "Discovery reports objects_port");
+        if (pmoi_use_tcp_) {
+            pmoi_tcp_ = std::make_unique<TcpStreamClient>();
+            if (pmoi_tcp_->Open(config_.sensor_ip, config_.pmoi_port,
+                                config_.socket_buffer_size,
+                                config_.connect_timeout_ms) < 0) {
+                AFI_LOG_WARN("PMOI TCP %s:%d unavailable; PMOI disabled",
+                             config_.sensor_ip.c_str(), config_.pmoi_port);
+                pmoi_tcp_.reset();
+            } else {
+                pmoi_active_ = true;
+            }
+        } else if (pmoi_udp_.Open(config_.pmoi_port, config_.socket_buffer_size) < 0) {
+            AFI_LOG_WARN("PMOI UDP port %d unavailable; PMOI disabled", config_.pmoi_port);
+        } else {
+            pmoi_active_ = true;
+        }
+    }
     // UDP streams accept only the sensor's own datagrams (12_System_Log tells
     // radars apart by source IP); see SetExpectedSource.
-    for (UdpReceiver* udp : {&rdi_udp_, &shi_udp_, &spi_udp_}) {
+    for (UdpReceiver* udp : {&rdi_udp_, &shi_udp_, &spi_udp_, &pmoi_udp_}) {
         if (udp->IsOpen()) udp->SetExpectedSource(config_.sensor_ip);
     }
 
@@ -324,6 +358,9 @@ int AfiSdk::Impl::Start() {
     if (config_.enable_spi) {
         spi_thread_ = std::make_unique<std::thread>(&Impl::SpiThreadFunc, this);
     }
+    if (pmoi_active_) {
+        pmoi_thread_ = std::make_unique<std::thread>(&Impl::PmoiThreadFunc, this);
+    }
 
     state_.store(State::kRunning);
     AFI_LOG_INFO("SDK started");
@@ -342,15 +379,19 @@ int AfiSdk::Impl::Stop() {
     else shi_udp_.Close();
     if (spi_tcp_) { spi_tcp_->SetStopping(); spi_tcp_->Close(); }
     else spi_udp_.Close();
+    if (pmoi_tcp_) { pmoi_tcp_->SetStopping(); pmoi_tcp_->Close(); }
+    else pmoi_udp_.Close();
 
     // Join threads
     if (rdi_thread_ && rdi_thread_->joinable()) rdi_thread_->join();
     if (shi_thread_ && shi_thread_->joinable()) shi_thread_->join();
     if (spi_thread_ && spi_thread_->joinable()) spi_thread_->join();
+    if (pmoi_thread_ && pmoi_thread_->joinable()) pmoi_thread_->join();
 
     rdi_thread_.reset();
     shi_thread_.reset();
     spi_thread_.reset();
+    pmoi_thread_.reset();
 
     // Disconnect TCP
     csii_sender_.Disconnect();
@@ -487,6 +528,24 @@ void AfiSdk::Impl::SpiThreadFunc() {
     }
 
     AFI_LOG_INFO("SPI thread stopped");
+}
+
+void AfiSdk::Impl::PmoiThreadFunc() {
+    platform_set_thread_name("afi-pmoi");
+    AFI_LOG_INFO("PMOI thread started (%s port %d)",
+                 pmoi_use_tcp_ ? "TCP" : "UDP", config_.pmoi_port);
+
+    std::vector<uint8_t> buf(kAfiMaxUdpDatagramBytes);
+
+    while (running_.load()) {
+        int n = pmoi_use_tcp_
+            ? pmoi_tcp_->Receive(buf, kAfiWireFrameSafetyLimit)
+            : pmoi_udp_.Receive(buf.data(), buf.size());
+        if (n <= 0) continue;
+        ProcessPmoiDatagram(buf.data(), static_cast<size_t>(n));
+    }
+
+    AFI_LOG_INFO("PMOI thread stopped");
 }
 
 
@@ -726,6 +785,72 @@ void AfiSdk::Impl::ProcessSpiDatagram(const uint8_t* data, size_t len) {
             }
         }
     }
+}
+
+void AfiSdk::Impl::ProcessPmoiDatagram(const uint8_t* data, size_t len) {
+    SomeipHeader hdr;
+    if (!ValidateStreamMessage(data, len, kEventPmoi, "PMOI", hdr)) return;
+
+    const bool is_tp = someip_is_tp(hdr.message_type);
+    size_t offset = kSomeipHeaderSize;
+    const uint8_t* payload;
+    size_t payload_len;
+
+    if (is_tp) {
+        if (len < kSomeipHeaderSize + kSomeipTpHeaderSize) return;
+
+        SomeipTpHeader tp;
+        someip_tp_deserialize(data + offset, tp);
+        if (!tp.valid) {
+            pmoi_tp_.Reset();
+            return;
+        }
+        offset += kSomeipTpHeaderSize;
+
+        const size_t seg_len = len - offset;
+        const bool complete = pmoi_tp_.Feed(data + offset, seg_len,
+                                            tp.offset_bytes, tp.more_segments,
+                                            hdr.session_id);
+        if (!complete) return;
+
+        payload = pmoi_tp_.GetPayload();
+        payload_len = pmoi_tp_.GetPayloadSize();
+    } else {
+        if (pmoi_tp_.InProgress()) pmoi_tp_.Reset();
+        payload = data + offset;
+        payload_len = len - offset;
+    }
+
+    const uint8_t* wire_payload = payload;
+    const size_t wire_payload_len = payload_len;
+    E2eHeader e2e;
+    bool e2e_valid = false;
+    if (!ConsumeE2eHeader(payload, payload_len, "PMOI",
+                          BTS_E2E_DATA_ID_PMOI, e2e_failures_[3],
+                          &e2e, &e2e_valid)) {
+        if (is_tp) pmoi_tp_.Reset();
+        return;
+    }
+
+    const uint64_t recv_timestamp_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    DeliverWirePayload(AfiStreamKind::kObjects, wire_payload,
+                       wire_payload_len, payload, payload_len,
+                       recv_timestamp_ns, &e2e, e2e_valid);
+
+    // Payload reception is independent of the current PMOI
+    // domain parser. Only consumers that request typed PMOI pay the parse cost.
+    if (pmoi_cb_) {
+        AfiPmoiFrame frame{};
+        frame.recv_timestamp_ns = recv_timestamp_ns;
+        frame.frame_seq = pmoi_frame_seq_.fetch_add(1);
+        if (pmoi_parser_.Parse(payload, payload_len, frame) == 0) {
+            pmoi_cb_(frame);
+        }
+    }
+
+    if (is_tp) pmoi_tp_.Reset();
 }
 
 

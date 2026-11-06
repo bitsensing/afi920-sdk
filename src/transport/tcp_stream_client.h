@@ -59,7 +59,7 @@ public:
      * @brief Receive one complete SOME/IP message into a dynamically sized buffer
      *
      * The frame size is taken from the SOME/IP Length field.  This keeps stream
-     * reception independent of the currently compiled RDI/SHII/SPI/Raw
+     * reception independent of the currently compiled RDI/SHII/SPI/PMOI/Raw
      * Data domain schema.  max_frame_size is only a transport memory-safety
      * ceiling; it is not a typed payload limit.
      *

@@ -244,6 +244,7 @@ int ConfigClient::GetNetworkConfig(AfiNetworkConfig& out) {
     parse_stream_destination(data, "detection", 30509, out.detection);
     parse_stream_destination(data, "health", 30510, out.health);
     parse_stream_destination(data, "performance", 30511, out.performance);
+    parse_stream_destination(data, "objects", 30512, out.objects);
     return kOk;
 }
 
@@ -264,6 +265,14 @@ int ConfigClient::SetNetworkConfig(const AfiNetworkConfig& config, bool* restart
         {"performance_port", config.performance.port},
         {"performance_protocol", config.performance.protocol},
     };
+    // Interface v1.1.0 defines only the detection, health, and performance
+    // stream keys (02_Network.md 02.2). `objects` is kept for source
+    // compatibility and is never sent.
+    if (!config.objects.ip.empty() || config.objects.port != 0 ||
+        !config.objects.protocol.empty()) {
+        AFI_LOG_WARN("SetNetworkConfig: objects_* is not defined on interface "
+                     "v1.1.0 and is not sent");
+    }
     json data;
     int rc = SendJsonRequest(static_cast<uint16_t>(MethodId::kSetNetworkConfig), req, data);
     if (rc != kOk) return rc;
@@ -277,6 +286,10 @@ int ConfigClient::SetStreamDestination(AfiStreamKind kind, const AfiStreamDestin
         case AfiStreamKind::kDetection:   prefix = "detection"; break;
         case AfiStreamKind::kHealth:      prefix = "health"; break;
         case AfiStreamKind::kPerformance: prefix = "performance"; break;
+        case AfiStreamKind::kObjects:
+            AFI_LOG_WARN("SetStreamDestination: objects_* is not defined on "
+                         "interface v1.1.0");
+            return kInvalidParam;
     }
     if (!prefix) return kInvalidParam;
 

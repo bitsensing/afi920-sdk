@@ -111,6 +111,7 @@ EVENT_CSII     = 0x8001   # Host -> Radar (UDP on v1.1.0, TCP on v1.0.x)
 EVENT_RDI      = 0x8002
 EVENT_SHII     = 0x8003
 EVENT_SPI      = 0x8004
+EVENT_PMOI     = 0x8005   # reserved; not sent on interface v1.1.0
 
 # ── Default Ports ──
 
@@ -119,6 +120,7 @@ DEFAULT_CSII_PORT      = 30501
 DEFAULT_RDI_PORT       = 30509
 DEFAULT_SHII_PORT      = 30510
 DEFAULT_SPI_PORT       = 30511
+DEFAULT_PMOI_PORT      = 30512
 DEFAULT_SYSLOG_PORT    = 30515
 DEFAULT_DISCOVERY_PORT = 30520
 

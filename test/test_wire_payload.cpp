@@ -151,6 +151,7 @@ TEST(callback_precedes_domain_parser) {
     config.enable_rdi = false;
     config.enable_shi = true;
     config.enable_spi = false;
+    config.enable_pmoi = false;
     config.shi_transport = "udp";
     config.shi_port = test_port();
     config.validate_e2e = true;
@@ -206,53 +207,83 @@ TEST(callback_precedes_domain_parser) {
     PASS("callback_precedes_domain_parser");
 }
 
-TEST(tp_reassembly_preserves_rdi_payload) {
+TEST(tp_reassembly_preserves_rdi_and_pmoi_payloads) {
     AfiSdkConfig config;
     config.sensor_ip = "127.0.0.1";  // loopback senders
     config.enable_config_api = false;
     config.enable_rdi = true;
     config.enable_shi = false;
     config.enable_spi = false;
+    config.enable_pmoi = true;
     config.rdi_transport = "udp";
+    config.pmoi_transport = "udp";
     config.rdi_port = test_port(10);
+    config.pmoi_port = test_port(11);
     config.validate_e2e = true;
     config.e2e_strict = true;
 
-    // The payload intentionally exceeds the compiled typed-schema maximum.
+    // Both payloads intentionally exceed their compiled typed-schema maxima.
     // TP reassembly is a transport concern and must not use those maxima as a
     // capture limit.
     const auto rdi_payload = make_future_protected_payload(
         BTS_E2E_DATA_ID_RDI, 101, BTS_RDI_MAX_PAYLOAD_SIZE + 64u,
         1111111111111ull, 501);
-    AfiWirePayloadFrame captured;
-    std::atomic<bool> received{false};
+    const auto pmoi_payload = make_future_protected_payload(
+        BTS_E2E_DATA_ID_PMOI, 102, BTS_PMOI_MAX_PAYLOAD_SIZE + 64u,
+        2222222222222ull, 502);
+    std::array<AfiWirePayloadFrame, 2> captured;
+    std::atomic<uint8_t> received_mask{0};
     std::atomic<uint32_t> typed_rdi{0};
+    std::atomic<uint32_t> typed_pmoi{0};
 
     AfiSdk sdk;
     sdk.RegWirePayloadCallback([&](const AfiWirePayloadFrame& frame) {
         if (frame.stream == AfiStreamKind::kDetection) {
-            captured = frame;
-            received.store(true);
+            captured[0] = frame;
+            received_mask.fetch_or(1);
+        } else if (frame.stream == AfiStreamKind::kObjects) {
+            captured[1] = frame;
+            received_mask.fetch_or(2);
         }
     });
     sdk.RegRecvCallback([&](const AfiRdiFrame&) { typed_rdi.fetch_add(1); });
+    // PMOI is deprecated on v1.1.0; the transport path is still covered.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    sdk.RegRecvCallback([&](const AfiPmoiFrame&) { typed_pmoi.fetch_add(1); });
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
     CHECK(sdk.Init(config) == kOk);
     CHECK(sdk.Start() == kOk);
     CHECK(send_tp_payload(config.rdi_port, kEventRdi, 71, rdi_payload));
-    for (int i = 0; i < 200 && !received.load(); ++i) {
+    CHECK(send_tp_payload(config.pmoi_port, kEventPmoi, 72, pmoi_payload));
+    for (int i = 0; i < 200 && received_mask.load() != 3; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     CHECK(sdk.Stop() == kOk);
 
-    CHECK(received.load());
+    CHECK(received_mask.load() == 3);
     CHECK(typed_rdi.load() == 0);
-    CHECK(captured.payload == rdi_payload);
-    CHECK(captured.sensor_timestamp_ns == 1111111111111ull);
-    CHECK(captured.message_counter == 501);
-    CHECK(captured.e2e_counter == 101);
-    CHECK(captured.e2e_valid);
-    PASS("tp_reassembly_preserves_rdi_payload");
+    CHECK(typed_pmoi.load() == 0);
+    CHECK(captured[0].payload == rdi_payload);
+    CHECK(captured[1].payload == pmoi_payload);
+    CHECK(captured[0].sensor_timestamp_ns == 1111111111111ull);
+    CHECK(captured[1].sensor_timestamp_ns == 2222222222222ull);
+    CHECK(captured[0].message_counter == 501);
+    CHECK(captured[1].message_counter == 502);
+    CHECK(captured[0].e2e_counter == 101);
+    CHECK(captured[1].e2e_counter == 102);
+    CHECK(captured[0].e2e_valid && captured[1].e2e_valid);
+    PASS("tp_reassembly_preserves_rdi_and_pmoi_payloads");
 }
 
 TEST(e2e_failure_is_reported_not_dropped) {
@@ -262,6 +293,7 @@ TEST(e2e_failure_is_reported_not_dropped) {
     config.enable_rdi = false;
     config.enable_shi = true;
     config.enable_spi = false;
+    config.enable_pmoi = false;
     config.shi_transport = "udp";
     config.shi_port = test_port(20);
     config.validate_e2e = true;  // e2e_strict stays at its default (false)
@@ -354,6 +386,7 @@ TEST(typed_callbacks_carry_the_e2e_verdict_and_loss_skips_failed_frames) {
     config.enable_rdi = true;
     config.enable_shi = true;
     config.enable_spi = false;
+    config.enable_pmoi = false;
     config.rdi_transport = "udp";
     config.shi_transport = "udp";
     config.rdi_port = test_port(40);
@@ -510,6 +543,7 @@ TEST(udp_streams_drop_other_sources) {
     config.enable_rdi = false;
     config.enable_shi = true;
     config.enable_spi = false;
+    config.enable_pmoi = false;
     config.shi_transport = "udp";
     config.shi_port = test_port(45);
     config.validate_e2e = true;
@@ -528,6 +562,48 @@ TEST(udp_streams_drop_other_sources) {
     CHECK(sdk.Stop() == kOk);
     CHECK(wire.load() == 0);
     PASS("udp_streams_drop_other_sources");
+}
+
+TEST(unavailable_pmoi_does_not_fail_init) {
+    // v1.1.0 radars do not serve PMOI. A refused PMOI TCP connect must not
+    // block the other streams.
+    AfiSdkConfig config;
+    config.sensor_ip = "127.0.0.1";
+    config.enable_config_api = false;
+    config.enable_rdi = false;
+    config.enable_shi = true;
+    config.enable_spi = false;
+    config.enable_pmoi = true;
+    config.shi_transport = "udp";
+    config.pmoi_transport = "tcp";
+    config.shi_port = test_port(40);
+    config.pmoi_port = test_port(41);  // nothing listens here
+    config.connect_timeout_ms = 500;
+
+    std::atomic<bool> received{false};
+    AfiSdk sdk;
+    sdk.RegWirePayloadCallback([&](const AfiWirePayloadFrame& f) {
+        if (f.stream == AfiStreamKind::kHealth) received.store(true);
+    });
+    CHECK(sdk.Init(config) == kOk);
+    CHECK(sdk.Start() == kOk);
+
+    const auto frame = make_future_shi_frame();
+    socket_t sender = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(config.shi_port);
+    dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ::sendto(sender, reinterpret_cast<const char*>(frame.data()),
+             static_cast<int>(frame.size()), 0,
+             reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
+    platform_close_socket(sender);
+    for (int i = 0; i < 100 && !received.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(sdk.Stop() == kOk);
+    CHECK(received.load());
+    PASS("unavailable_pmoi_does_not_fail_init");
 }
 
 

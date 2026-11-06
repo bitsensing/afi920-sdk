@@ -3,7 +3,7 @@
  * @brief SOME/IP-TP segment reassembly
  *
  * Handles reassembly of segmented SOME/IP messages. UDP payloads larger than
- * the 1392-byte transport chunk (notably RDI) use TP segmentation.
+ * the 1392-byte transport chunk (notably RDI and PMOI) use TP segmentation.
  *
  * Copyright (c) 2026 bitsensing Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause

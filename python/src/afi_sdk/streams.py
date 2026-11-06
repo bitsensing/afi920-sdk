@@ -36,6 +36,7 @@ E2E_DATA_ID_CSII = 0x60008001
 E2E_DATA_ID_RDI  = 0x60008002
 E2E_DATA_ID_SHII = 0x60008003
 E2E_DATA_ID_SPI  = 0x60008004
+E2E_DATA_ID_PMOI = 0x60008005
 
 # IEEE 802.3 CRC-32 (zlib): poly 0x04C11DB7 reflected, init/xorout all-ones.
 CRC32_CHECK = 0xCBF43926
@@ -483,6 +484,87 @@ def parse_spi(payload: bytes) -> Optional[dict]:
     msg["reference_target_types"] = reference_targets
 
     return msg
+
+
+# ── PMOI (Potentially Moving Objects, Event 0x8005) ──
+
+PMOI_HEADER_SIZE = 30
+PMOI_OBJECT_SIZE = 116
+PMOI_MAX_OBJECTS = 255
+PMOI_MAX_CLASSIFICATIONS = 5
+PMOI_MAX_PAYLOAD_SIZE = PMOI_HEADER_SIZE + PMOI_MAX_OBJECTS * PMOI_OBJECT_SIZE
+
+
+def parse_pmoi_frame(payload: bytes) -> Optional[dict]:
+    """Parse a complete PMOI ISO 23150 payload (post-E2E)."""
+    if len(payload) < PMOI_HEADER_SIZE:
+        return None
+    num_objects = struct.unpack_from("<H", payload, 28)[0]
+    if num_objects > PMOI_MAX_OBJECTS:
+        return None
+    if len(payload) != PMOI_HEADER_SIZE + num_objects * PMOI_OBJECT_SIZE:
+        return None
+    return {
+        "version": (payload[0], payload[1], payload[2]),
+        "interface_id": payload[3],
+        "num_serving_sensors": payload[4],
+        "sensor_id": payload[5],
+        "timestamp": struct.unpack_from("<Q", payload, 6)[0],
+        "message_counter": struct.unpack_from("<I", payload, 14)[0],
+        "interface_cycle_time": struct.unpack_from("<I", payload, 18)[0],
+        "cycle_time_variation": payload[22],
+        "data_qualifier": payload[23],
+        "motion_type": payload[24],
+        "objects_capability": struct.unpack_from("<H", payload, 25)[0],
+        "objects_status": payload[27],
+        "num_objects": num_objects,
+        "object_start": PMOI_HEADER_SIZE,
+    }
+
+
+def parse_pmoi_object(payload: bytes, object_start: int, index: int
+                      ) -> Optional[dict]:
+    """Parse one fixed-size PMOI object entity (116B, little-endian)."""
+    off = object_start + index * PMOI_OBJECT_SIZE
+    if index < 0 or off < 0 or off + PMOI_OBJECT_SIZE > len(payload):
+        return None
+
+    num_classifications = payload[off + 11]
+    if num_classifications > PMOI_MAX_CLASSIFICATIONS:
+        return None
+    classifications = [
+        {"type": payload[off + 12 + i * 2],
+         "confidence": payload[off + 13 + i * 2]}
+        for i in range(num_classifications)
+    ]
+
+    values = struct.unpack_from("<22f", payload, off + 23)
+    return {
+        "existence_probability": struct.unpack_from("<f", payload, off)[0],
+        "object_id": payload[off + 4],
+        "object_grouping_id": payload[off + 5],
+        "age": struct.unpack_from("<f", payload, off + 6)[0],
+        "measurement_status": payload[off + 10],
+        "num_classifications": num_classifications,
+        "classifications": classifications,
+        "reference_point": payload[off + 22],
+        "position_x": values[0], "position_y": values[1], "position_z": values[2],
+        "position_error_x": values[3], "position_error_y": values[4],
+        "position_error_z": values[5],
+        "orientation_yaw": values[6],
+        "bounding_box_length": values[7], "bounding_box_width": values[8],
+        "bounding_box_height": values[9],
+        "velocity_x": values[10], "velocity_y": values[11], "velocity_z": values[12],
+        "velocity_error_x": values[13], "velocity_error_y": values[14],
+        "velocity_error_z": values[15],
+        "acceleration_x": values[16], "acceleration_y": values[17],
+        "acceleration_z": values[18],
+        "acceleration_error_x": values[19],
+        "acceleration_error_y": values[20],
+        "acceleration_error_z": values[21],
+        "movement_status": payload[off + 111],
+        "radar_cross_section": struct.unpack_from("<f", payload, off + 112)[0],
+    }
 
 
 # ── CSII (Common Sensor Input, Event 0x8001, Host → Radar) ──

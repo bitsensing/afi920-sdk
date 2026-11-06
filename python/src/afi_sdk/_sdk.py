@@ -11,6 +11,7 @@ SPDX-License-Identifier: BSD-3-Clause
 """
 
 import json
+import warnings
 import math
 import socket
 import time
@@ -96,6 +97,8 @@ class AfiSdkConfig:
     #: CSII transport: "" picks it from the interface generation (UDP on
     #: v1.1.0, TCP on v1.0.x, UDP while unknown); "udp" or "tcp" forces one.
     csii_transport: str = ""
+    # Appended to preserve existing positional dataclass construction.
+    pmoi_port: int = 30512
 
 
 # ── Enums ──
@@ -440,12 +443,21 @@ class AfiSdk:
         """Set network config (partial update — only given fields change).
 
         Keyword fields: ip_address, subnet_mask, gateway, api_port, vlan_id,
-        {detection,health,performance}_{ip,port,protocol}. The SET requires
-        the diagnostic access mode, is written to NVM, and applies after a
-        restart.
+        {detection,health,performance}_{ip,port,protocol}. Interface v1.1.0
+        defines no objects_* keys. The SET requires the diagnostic access
+        mode, is written to NVM, and applies after a restart.
 
         Returns the response data (contains restart_required) or None on error.
         """
+        dropped = sorted(k for k in fields if k.startswith("objects_"))
+        if dropped:
+            # Interface v1.1.0 defines no objects_* keys (02_Network.md 02.2).
+            warnings.warn(f"set_network_config: {dropped} are not defined on "
+                          "interface v1.1.0 and are not sent",
+                          DeprecationWarning, stacklevel=2)
+            fields = {k: v for k, v in fields.items() if k not in dropped}
+            if not fields:
+                return None
         return self._get_with_payload(METHOD_SET_NETWORK_CONFIG, fields)
 
     def set_stream_destination(self, stream: str, ip: str, port: int,

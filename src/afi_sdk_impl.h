@@ -18,6 +18,7 @@
 #include "protocol/e2e.h"
 #include "protocol/csii_builder.h"
 #include "protocol/rdi_parser.h"
+#include "protocol/pmoi_parser.h"
 #include "protocol/shi_parser.h"
 #include "protocol/spi_parser.h"
 
@@ -59,6 +60,7 @@ public:
     std::function<void(const AfiSpiMessage&)>          spi_cb_;
     std::function<void(const AfiShiMessage&, const AfiStreamMeta&)> shi_meta_cb_;
     std::function<void(const AfiSpiMessage&, const AfiStreamMeta&)> spi_meta_cb_;
+    std::function<void(const AfiPmoiFrame&)>           pmoi_cb_;
     std::function<void(uint32_t, uint32_t)>            loss_cb_;
     std::function<void(const AfiWirePayloadFrame&)>    wire_payload_cb_;
 
@@ -71,11 +73,13 @@ private:
     void RdiThreadFunc();
     void ShiThreadFunc();
     void SpiThreadFunc();
+    void PmoiThreadFunc();
 
     // ─── Process a single UDP datagram ───
     void ProcessRdiDatagram(const uint8_t* data, size_t len);
     void ProcessShiDatagram(const uint8_t* data, size_t len);
     void ProcessSpiDatagram(const uint8_t* data, size_t len);
+    void ProcessPmoiDatagram(const uint8_t* data, size_t len);
 
     // ─── Strip and verify the 20B E2E header ───
     // Advances payload/payload_len past the E2E header. A failed check
@@ -117,12 +121,16 @@ private:
     bool rdi_use_tcp_ = false;
     bool shi_use_tcp_ = false;
     bool spi_use_tcp_ = false;
+    bool pmoi_use_tcp_ = false;
+    bool pmoi_active_ = false;   // PMOI endpoint opened (optional on v1.1.0)
     UdpReceiver rdi_udp_;
     UdpReceiver shi_udp_;
     UdpReceiver spi_udp_;
+    UdpReceiver pmoi_udp_;
     std::unique_ptr<TcpStreamClient> rdi_tcp_;
     std::unique_ptr<TcpStreamClient> shi_tcp_;
     std::unique_ptr<TcpStreamClient> spi_tcp_;
+    std::unique_ptr<TcpStreamClient> pmoi_tcp_;
     TcpClient   tcp_client_;
     std::unique_ptr<ConfigClient> config_client_;
 
@@ -140,7 +148,9 @@ private:
 
     // ─── Protocol ───
     SomeipTpReassembler rdi_tp_{kAfiWirePayloadSafetyLimit};
+    SomeipTpReassembler pmoi_tp_{kAfiWirePayloadSafetyLimit};
     RdiParser rdi_parser_;
+    PmoiParser pmoi_parser_;
     ShiParser shi_parser_;
     SpiParser spi_parser_;
 
@@ -148,9 +158,11 @@ private:
     std::unique_ptr<std::thread> rdi_thread_;
     std::unique_ptr<std::thread> shi_thread_;
     std::unique_ptr<std::thread> spi_thread_;
+    std::unique_ptr<std::thread> pmoi_thread_;
 
     // ─── Stats ───
     std::atomic<uint32_t> rdi_frame_seq_{0};
+    std::atomic<uint32_t> pmoi_frame_seq_{0};
     std::atomic<uint32_t> total_packets_{0};
     std::atomic<uint32_t> lost_packets_{0};
     uint32_t last_rdi_e2e_counter_ = 0;

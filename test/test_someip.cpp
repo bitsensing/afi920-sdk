@@ -74,6 +74,7 @@ TEST(event_ids_match_registry) {
     CHECK(kEventRdi  == 0x8002);
     CHECK(kEventShii == 0x8003);
     CHECK(kEventSpi  == 0x8004);
+    CHECK(kEventPmoi == 0x8005);
     CHECK(kSomeipProtocolVersion == 0x01);
     CHECK(kSomeipInterfaceVersion == 0x01);
     CHECK(kE2eHeaderSize == 20u);

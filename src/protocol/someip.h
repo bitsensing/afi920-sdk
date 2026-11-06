@@ -33,6 +33,7 @@ static constexpr uint16_t kEventCsii    = 0x8001;  // Host → Radar (UDP on v1.
 static constexpr uint16_t kEventRdi     = 0x8002;
 static constexpr uint16_t kEventShii    = 0x8003;
 static constexpr uint16_t kEventSpi     = 0x8004;
+static constexpr uint16_t kEventPmoi    = 0x8005;
 
 // ─── E2E header, 20B CRC-32 (RDI/SHII/SPI/CSII/Config API) ───
 
