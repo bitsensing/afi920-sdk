@@ -4,7 +4,7 @@
 |------|-------|
 | Audience | AI coding assistants, LLM-driven automation, and engineers who need the shortest path from a bitsensing AFI920 4D imaging radar to working code |
 | SDK version | 2.2.0 (C++ and Python) |
-| Sensor interface | AFI920 interface v1.1.0 (firmware v3.1.1). Interface v1.0.x (firmware 3.0.0 to 3.1.0) is supported for data only, see [section 13](#13-interface-v10x-compatibility) |
+| Sensor interface | AFI920 interface v1.1.0. Interface v1.0.x (firmware 3.0.0 to 3.1.0) is supported for data only, see [section 13](#13-interface-v10x-compatibility) |
 | License | BSD-3-Clause |
 | Full API reference | [docs/api_reference.md](docs/api_reference.md) |
 
@@ -272,7 +272,7 @@ cfg.enable_spi = true;
 
 afi::AfiSdk sdk;
 
-// RDI: point cloud (FW v3.1.1 sends at most 2048 detections per frame; the protocol allows 8192)
+// RDI: point cloud (interface v1.1.0 firmware sends at most 2048 detections per frame; the protocol allows 8192)
 sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
     /* f.message.detections[0 .. f.message.num_detections-1], f.e2e_valid, f.generation */
 });
@@ -562,7 +562,7 @@ sdk.set_detection_filters(filter_ground_reflection=True, filter_multibounce_2x=T
 | `filter_wheel_microdoppler` | `false` |
 | `filter_ground_reflection` | `false` (SR subcycle) |
 
-FW v3.1.1 stores the SNR level but does not use it in detection. It stores `filter_ego_specular`, `filter_upper_structure` and `filter_wheel_microdoppler` but does not build those stages.
+Interface v1.1.0 firmware stores the SNR level but does not use it in detection. It stores `filter_ego_specular`, `filter_upper_structure` and `filter_wheel_microdoppler` but does not build those stages.
 
 ### Time Sync (PTP)
 
@@ -783,7 +783,7 @@ sdk.close()
 | Threading | Runs on the caller's thread, serialized internally |
 | Errors | C++: `kNotInitialized` before `Init()`, `kConnectFailed` when the socket cannot be created or connected or the send fails. Python: `NOT_INITIALIZED`, `DISCONNECTED` |
 | Access mode | Accepted in every mode |
-| FW v3.1.1 | Stores the received values. SOMC and the global timestamp do not change sensor behaviour |
+| Interface v1.1.0 firmware | Stores the received values. SOMC and the global timestamp do not change sensor behaviour |
 
 ```cpp
 // C++
@@ -927,9 +927,9 @@ for idx, ip in enumerate(["192.168.10.150", "192.168.10.151"]):
 
 ## 13. Interface v1.0.x Compatibility
 
-SDK 2.2.0 receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) as well as interface v1.1.0 (firmware 3.1.1). The Config API and the firmware update are interface v1.1.0 only. Support for v1.0.x ends with this release.
+SDK 2.2.0 receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) as well as interface v1.1.0. The Config API and the firmware update are interface v1.1.0 only. Support for v1.0.x ends with this release.
 
-| Function | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
+| Function | Interface v1.1.0 | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
 |----------|-----------------------------|--------------------------------------|
 | Discovery | Supported | Supported |
 | RDI, SHII, SPI reception | Supported | Supported |
@@ -1003,7 +1003,7 @@ The Python `AfiSdkConfig` dataclass has `sensor_ip`, `config_port`, `csii_port`,
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
 | `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header |
 
-`message` holds the Common Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 sends at most 2048.
+`message` holds the Common Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; interface v1.1.0 firmware sends at most 2048.
 
 ### Detection Fields (`bts_rdi_detection_t`, 51 bytes)
 

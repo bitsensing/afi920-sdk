@@ -9,9 +9,9 @@
 C++ and Python SDK for the bitsensing **AFI920 4D Imaging Radar**.  
 Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, the Config API with its access modes, and firmware update.
 
-> **Version 2.2.0**: tracks AFI920 interface v1.1.0 (firmware v3.1.1) and receives data from interface v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
+> **Version 2.2.0**: tracks AFI920 interface v1.1.0 and receives data from interface v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
 
-> **Branch `feature/lsad_test`**: PMOI test build for sensors on firmware 3.1.0. Besides RDI/SHII/SPI it receives PMOI (Event `0x8005`) from sensors whose Discovery reports `objects_port`. Enable it with `AfiSdkConfig::enable_pmoi` and `pmoi_port` (C++) or `AfiSdkConfig.pmoi_port` with `afi_sdk.streams.parse_pmoi_frame()` (Python). On firmware 3.1.0 (interface v1.0.x) the Config API and firmware update return `kNotSupported`; firmware 3.1.1 does not send PMOI.
+> **Branch `feature/lsad_test`**: PMOI test build for sensors on firmware 3.1.0. Besides RDI/SHII/SPI it receives PMOI (Event `0x8005`) from sensors whose Discovery reports `objects_port`. Enable it with `AfiSdkConfig::enable_pmoi` and `pmoi_port` (C++) or `AfiSdkConfig.pmoi_port` with `afi_sdk.streams.parse_pmoi_frame()` (Python). On firmware 3.1.0 (interface v1.0.x) the Config API and firmware update return `kNotSupported`; interface v1.1.0 firmware does not send PMOI.
 
 > **bitsensing**: [bitsensing.com](https://bitsensing.com)
 
@@ -123,7 +123,7 @@ Expected output:
 ```
 192.168.10.150 - AFI920-001234
 Serial: AFI920-001234
-SW Version: 3.1.1
+SW Version: 3.1.0
 ```
 
 > **Tip:** In environments with multiple NICs, specify the discovery interface explicitly. In C++, use `Discover(3000, 30520, "192.168.10.100")`. In Python, use `discover(bind_ip="192.168.10.100")`. Discovery responses travel over UDP and one can be missed; if a sensor does not appear, run Discovery again.
@@ -291,9 +291,9 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 
 ## Firmware Compatibility
 
-This SDK release receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) as well as interface v1.1.0 (firmware 3.1.1). The Config API and the firmware update are interface v1.1.0 only. Support for v1.0.x ends with this release. bitsensing moves those sensors to firmware 3.1.1.
+This SDK release receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) as well as interface v1.1.0. The Config API and the firmware update are interface v1.1.0 only. Support for v1.0.x ends with this release. bitsensing moves those sensors to interface v1.1.0 firmware.
 
-| Function | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
+| Function | Interface v1.1.0 | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
 |----------|-----------------------------|--------------------------------------|
 | Discovery | Supported | Supported |
 | RDI, SHII, SPI reception | Supported | Supported (E2E CRC-64/XZ accepted) |
@@ -538,7 +538,7 @@ Wire-format data is represented via ISO 23150 C structures under `third_party/af
 | `object_id_reference` | `uint16_t` | Associated object ID (reserved) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | Measurement errors (range/azimuth/elevation/velocity) |
 
-The protocol allows up to **8192 detections per frame** (36-byte header + 51 bytes per detection); firmware v3.1.1 sends at most 2048. UDP large frames are segmented with SOME/IP-TP and reassembled automatically; TCP carries one complete SOME/IP frame.
+The protocol allows up to **8192 detections per frame** (36-byte header + 51 bytes per detection); interface v1.1.0 firmware sends at most 2048. UDP large frames are segmented with SOME/IP-TP and reassembled automatically; TCP carries one complete SOME/IP frame.
 
 > **Important:** A callback's frame reference is valid only during the callback. Copying the whole `AfiRdiFrame` is safe: the copy owns its vector and rebinds the C payload pointer. If you directly resize or replace the public storage vector, call `RebindStorage()` afterward.
 

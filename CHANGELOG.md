@@ -6,7 +6,7 @@ All notable changes to the AFI920 SDK will be documented in this file.
 
 ## v2.2.0 — Interface v1.1.0
 
-Release tracking the AFI920 interface v1.1.0 (sensor firmware v3.1.1).
+Release tracking the AFI920 interface v1.1.0.
 **Breaking** — the E2E CRC, the Config API framing and parts of the
 public API change. Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0)
 remain supported for data reception in this release only.
@@ -15,7 +15,7 @@ remain supported for data reception in this release only.
 
 This branch also receives PMOI (Potentially Moving Objects, Event `0x8005`)
 from sensors that send it, such as firmware 3.1.0, whose Discovery reports
-`objects_port`. Interface v1.1.0 (firmware 3.1.1) does not send PMOI.
+`objects_port`. Interface v1.1.0 does not send PMOI.
 
 - C++: set `AfiSdkConfig::enable_pmoi` and `pmoi_port` (from Discovery
   `objects_port`), and register the `AfiPmoiFrame` callback; the

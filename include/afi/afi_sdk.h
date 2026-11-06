@@ -120,7 +120,7 @@ public:
      * @param cb Called for each PMOI frame (from receiver thread)
      *
      * Needs AfiSdkConfig::enable_pmoi. Sensors that send PMOI (Event 0x8005)
-     * report objects_port in Discovery; interface v1.1.0 (FW v3.1.1) reserves
+     * report objects_port in Discovery; interface v1.1.0 reserves
      * the event and does not send it.
      */
     void RegRecvCallback(std::function<void(const AfiPmoiFrame&)> cb);

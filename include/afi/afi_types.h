@@ -39,7 +39,7 @@ namespace afi {
 enum class AfiInterfaceGeneration : uint8_t {
     kUnknown = 0,  ///< Not determined yet
     kV1_0    = 1,  ///< Interface v1.0.x (firmware 3.0.0 to 3.1.0)
-    kV1_1    = 2,  ///< Interface v1.1.0 (firmware 3.1.1)
+    kV1_1    = 2,  ///< Interface v1.1.0
 };
 
 /**
@@ -498,7 +498,7 @@ struct AfiDetectionThreshold {
 
 /// Detection filter toggles (interface v1.1.0, 8 filters). Defaults follow
 /// 04_Detection.md. ego_specular, upper_structure, and wheel_microdoppler are
-/// stored by FW v3.1.1 but not built into its filter chain.
+/// stored by interface v1.1.0 firmware but not built into its filter chain.
 struct AfiDetectionFilters {
     bool filter_ego_specular = false;
     bool filter_ground_sidelobe = true;

@@ -1,6 +1,6 @@
 """
-Live write-path verification against one AFI920 sensor (interface v1.1.0,
-firmware v3.1.1). DESTRUCTIVE: it rewrites the sensor's NVM settings, runs
+Live write-path verification against one AFI920 sensor (interface v1.1.0).
+DESTRUCTIVE: it rewrites the sensor's NVM settings, runs
 ResetConfigDefaults and ResetAllSettings, restarts the sensor several times,
 and enters the programming access mode. Every setting it touches is read
 first and written back at the end; a failure part way leaves the sensor in

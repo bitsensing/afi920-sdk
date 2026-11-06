@@ -1,5 +1,5 @@
 """
-RDI UDP Sender Simulator — interface v1.1.0 (firmware v3.1.1)
+RDI UDP Sender Simulator — interface v1.1.0
 
 Stands in for the radar: sends RDI frames protected by the 20B E2E header
 (CRC-32 over the body) and split with SOME/IP-TP over UDP.

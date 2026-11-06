@@ -1,6 +1,6 @@
 """
 Live firmware-update verification against one AFI920 sensor (interface
-v1.1.0, firmware v3.1.1). DESTRUCTIVE: it writes flash. It writes the
+v1.1.0). DESTRUCTIVE: it writes flash. It writes the
 inactive firmware face, optionally the bootloader in place, switches faces
 and reboots several times. The sensor ends on the written face.
 

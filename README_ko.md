@@ -9,9 +9,9 @@
 bitsensing **AFI920 4D Imaging Radar**용 C++ 및 Python SDK이다.  
 센서 탐색, RDI/SHII/SPI 데이터 수신, CSII 차량 정보 송신, 접근 모드를 포함한 Config API, 펌웨어 업데이트를 제공한다.
 
-> **Version 2.2.0**은 AFI920 인터페이스 v1.1.0(펌웨어 v3.1.1)을 기준으로 하며, 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)의 데이터도 수신한다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에서 확인한다.
+> **Version 2.2.0**은 AFI920 인터페이스 v1.1.0을 기준으로 하며, 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)의 데이터도 수신한다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에서 확인한다.
 
-> **`feature/lsad_test` 브랜치**는 펌웨어 3.1.0 센서용 PMOI 시험 빌드이다. RDI/SHII/SPI와 함께, Discovery가 `objects_port`를 보고하는 센서의 PMOI(Event `0x8005`)를 수신한다. C++에서는 `AfiSdkConfig::enable_pmoi`와 `pmoi_port`로, Python에서는 `AfiSdkConfig.pmoi_port`와 `afi_sdk.streams.parse_pmoi_frame()`으로 사용한다. 펌웨어 3.1.0(인터페이스 v1.0.x)에서 Config API와 펌웨어 업데이트는 `kNotSupported`를 반환하며, 펌웨어 3.1.1은 PMOI를 송출하지 않는다.
+> **`feature/lsad_test` 브랜치**는 펌웨어 3.1.0 센서용 PMOI 시험 빌드이다. RDI/SHII/SPI와 함께, Discovery가 `objects_port`를 보고하는 센서의 PMOI(Event `0x8005`)를 수신한다. C++에서는 `AfiSdkConfig::enable_pmoi`와 `pmoi_port`로, Python에서는 `AfiSdkConfig.pmoi_port`와 `afi_sdk.streams.parse_pmoi_frame()`으로 사용한다. 펌웨어 3.1.0(인터페이스 v1.0.x)에서 Config API와 펌웨어 업데이트는 `kNotSupported`를 반환하며, 인터페이스 v1.1.0 펌웨어는 PMOI를 송출하지 않는다.
 
 > **bitsensing** [bitsensing.com](https://bitsensing.com)
 
@@ -123,7 +123,7 @@ sdk.close()
 ```
 192.168.10.150 - AFI920-001234
 Serial: AFI920-001234
-SW Version: 3.1.1
+SW Version: 3.1.0
 ```
 
 > **팁** NIC(네트워크 인터페이스)가 여러 개인 환경에서는 Discovery 인터페이스를 명시적으로 지정한다. C++에서는 `Discover(3000, 30520, "192.168.10.100")`를, Python에서는 `discover(bind_ip="192.168.10.100")`를 사용한다. Discovery 응답은 UDP로 전달되므로 일부가 누락될 수 있으며, 센서가 목록에 없으면 Discovery를 다시 수행한다.
@@ -291,9 +291,9 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 
 ## Firmware Compatibility
 
-이번 SDK 릴리스는 인터페이스 v1.1.0(펌웨어 3.1.1) 센서와 함께 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0에서만 동작한다. v1.0.x 지원은 이번 릴리스로 종료하며, 해당 센서는 bitsensing이 펌웨어 3.1.1로 이전한다.
+이번 SDK 릴리스는 인터페이스 v1.1.0 센서와 함께 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0에서만 동작한다. v1.0.x 지원은 이번 릴리스로 종료하며, 해당 센서는 bitsensing이 인터페이스 v1.1.0 펌웨어로 이전한다.
 
-| 기능 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
+| 기능 | 인터페이스 v1.1.0 | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
 |------|------------------------------|-------------------------------------|
 | Discovery | 지원 | 지원 |
 | RDI, SHII, SPI 수신 | 지원 | 지원 (E2E CRC-64/XZ 허용) |
@@ -548,7 +548,7 @@ python test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>  
 | `object_id_reference` | `uint16_t` | 연계 Object ID (예약) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | 측정 오차 (거리/수평각/수직각/속도) |
 
-프로토콜은 프레임당 최대 **8192개 detection**(36바이트 헤더 + detection당 51바이트)을 허용하며, 펌웨어 v3.1.1은 최대 2048개를 송신한다. UDP 대형 프레임은 SOME/IP-TP로 분할되며 SDK가 자동으로 재조립한다. TCP는 완전한 SOME/IP 프레임 하나로 수신한다.
+프로토콜은 프레임당 최대 **8192개 detection**(36바이트 헤더 + detection당 51바이트)을 허용하며, 인터페이스 v1.1.0 펌웨어는 최대 2048개를 송신한다. UDP 대형 프레임은 SOME/IP-TP로 분할되며 SDK가 자동으로 재조립한다. TCP는 완전한 SOME/IP 프레임 하나로 수신한다.
 
 > **중요** callback으로 받은 frame 참조는 callback 실행 중에만 유효하다. `AfiRdiFrame` 전체를 복사하면 복사본이 vector를 소유하고 C payload 포인터를 다시 연결하므로 안전하다. 공개 storage vector를 직접 resize하거나 교체한 경우에는 `RebindStorage()`를 호출한다.
 

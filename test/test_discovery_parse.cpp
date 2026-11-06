@@ -33,7 +33,7 @@ TEST(legacy_v1_0_response) {
 
 TEST(v110_response_has_m72_keys) {
     AfiSensorInfo info;
-    CHECK(parse_json(R"({"return_code":0,"data":{"software_version":"3.1.1",)"
+    CHECK(parse_json(R"({"return_code":0,"data":{"software_version":"0.0.0",)"
                      R"("fw_hash":"f6c38c30","m72_ptp_state":"SLAVE"}})", info) == 0);
     CHECK(info.generation == AfiInterfaceGeneration::kV1_1);
     PASS("v110_response_has_m72_keys");

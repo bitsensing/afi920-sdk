@@ -304,7 +304,7 @@ def test_discovery_generation():
     raw = (LEGACY_DIR / "discovery_rsp.bin").read_bytes()
     legacy = json.loads(raw[16:].decode())["data"]
     assert discovery_generation(legacy) == INTERFACE_GEN_V1_0
-    assert discovery_generation({"software_version": "3.1.1",
+    assert discovery_generation({"software_version": "0.0.0",
                                  "m72_ptp_state": "SLAVE"}) == INTERFACE_GEN_V1_1
     assert discovery_generation({"software_version": "0.0.0"}) == INTERFACE_GEN_UNKNOWN
 

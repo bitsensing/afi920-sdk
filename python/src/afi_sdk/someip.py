@@ -172,7 +172,7 @@ ERR_TOO_LARGE = -4   # request body above MAX_REQUEST_BODY; nothing was sent
 # v1.0.x is limited to this SDK release.
 INTERFACE_GEN_UNKNOWN = 0
 INTERFACE_GEN_V1_0 = 1   # interface v1.0.x, firmware 3.0.0 to 3.1.0
-INTERFACE_GEN_V1_1 = 2   # interface v1.1.0, firmware 3.1.1
+INTERFACE_GEN_V1_1 = 2   # interface v1.1.0
 
 TRANSPORT_ERROR_NAMES = {ERR_TRANSPORT: "TRANSPORT", ERR_TIMEOUT: "TIMEOUT",
                          ERR_PROTOCOL: "PROTOCOL", ERR_TOO_LARGE: "TOO_LARGE"}

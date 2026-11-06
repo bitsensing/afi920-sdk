@@ -4,7 +4,7 @@
 |------|----|
 | 대상 | AI 코딩 어시스턴트, LLM 기반 자동화, bitsensing AFI920 4D 이미징 레이더를 가장 짧은 경로로 코드에 연동하려는 엔지니어 |
 | SDK 버전 | 2.2.0 (C++, Python) |
-| 센서 인터페이스 | AFI920 인터페이스 v1.1.0(펌웨어 v3.1.1)이다. 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0)는 데이터 수신만 지원하며, 세부 사항은 [13절](#13-인터페이스-v10x-호환)에서 확인한다 |
+| 센서 인터페이스 | AFI920 인터페이스 v1.1.0이다. 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0)는 데이터 수신만 지원하며, 세부 사항은 [13절](#13-인터페이스-v10x-호환)에서 확인한다 |
 | 라이선스 | BSD-3-Clause |
 | 전체 API 레퍼런스 | [docs/api_reference.md](docs/api_reference.md) |
 
@@ -272,7 +272,7 @@ cfg.enable_spi = true;
 
 afi::AfiSdk sdk;
 
-// RDI: point cloud (FW v3.1.1 sends at most 2048 detections per frame; the protocol allows 8192)
+// RDI: point cloud (interface v1.1.0 firmware sends at most 2048 detections per frame; the protocol allows 8192)
 sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
     /* f.message.detections[0 .. f.message.num_detections-1], f.e2e_valid, f.generation */
 });
@@ -562,7 +562,7 @@ sdk.set_detection_filters(filter_ground_reflection=True, filter_multibounce_2x=T
 | `filter_wheel_microdoppler` | `false` |
 | `filter_ground_reflection` | `false` (SR subcycle) |
 
-FW v3.1.1은 SNR 레벨을 저장하지만 감지에는 사용하지 않는다. `filter_ego_specular`, `filter_upper_structure`, `filter_wheel_microdoppler`도 저장만 하며 해당 처리 단계를 구성하지 않는다.
+인터페이스 v1.1.0 펌웨어는 SNR 레벨을 저장하지만 감지에는 사용하지 않는다. `filter_ego_specular`, `filter_upper_structure`, `filter_wheel_microdoppler`도 저장만 하며 해당 처리 단계를 구성하지 않는다.
 
 ### 시간 동기 (PTP)
 
@@ -783,7 +783,7 @@ sdk.close()
 | 스레드 | 호출자 스레드에서 실행되며 내부에서 직렬화된다 |
 | 오류 | C++는 `Init()` 전에 `kNotInitialized`를, 소켓 생성·연결·송신 실패 시 `kConnectFailed`를 반환한다. Python은 `NOT_INITIALIZED`, `DISCONNECTED`를 반환한다 |
 | 접근 모드 | 모든 모드에서 수락된다 |
-| FW v3.1.1 | 수신 값을 저장한다. SOMC와 global timestamp는 센서 동작을 바꾸지 않는다 |
+| 인터페이스 v1.1.0 펌웨어 | 수신 값을 저장한다. SOMC와 global timestamp는 센서 동작을 바꾸지 않는다 |
 
 ```cpp
 // C++
@@ -927,9 +927,9 @@ for idx, ip in enumerate(["192.168.10.150", "192.168.10.151"]):
 
 ## 13. 인터페이스 v1.0.x 호환
 
-SDK 2.2.0은 인터페이스 v1.1.0(펌웨어 3.1.1) 센서와 함께 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0에서만 동작한다. v1.0.x 지원은 이번 릴리스로 종료한다.
+SDK 2.2.0은 인터페이스 v1.1.0 센서와 함께 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0에서만 동작한다. v1.0.x 지원은 이번 릴리스로 종료한다.
 
-| 기능 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
+| 기능 | 인터페이스 v1.1.0 | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
 |------|------------------------------|-------------------------------------|
 | Discovery | 지원 | 지원 |
 | RDI, SHII, SPI 수신 | 지원 | 지원 |
@@ -1003,7 +1003,7 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | `e2e_valid` | `bool` | Length, Data ID, CRC 검증 통과 여부 |
 | `generation` | `AfiInterfaceGeneration` | E2E 헤더로 판정한 송신 측 세대 |
 
-`message`는 Common Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1은 최대 2048개를 송신한다.
+`message`는 Common Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. 인터페이스 v1.1.0 펌웨어는 최대 2048개를 송신한다.
 
 ### Detection 필드 (`bts_rdi_detection_t`, 51바이트)
 

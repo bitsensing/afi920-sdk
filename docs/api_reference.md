@@ -1,6 +1,6 @@
 # API Reference
 
-This reference describes SDK v2.2.0, which implements AFI920 interface v1.1.0 (sensor firmware v3.1.1).
+This reference describes SDK v2.2.0, which implements AFI920 interface v1.1.0.
 
 ## Protocol Stack
 
@@ -333,7 +333,7 @@ int SetDetectionFilters(const AfiDetectionFilters& filters);
 ```
 
 - The threshold and CFAR tables belong to the current range mode.
-- `snr_threshold_db` is a level in `1..9`. Fractions are stored as sent and the GET answers with two decimals. FW v3.1.1 stores the value but does not use it in detection.
+- `snr_threshold_db` is a level in `1..9`. Fractions are stored as sent and the GET answers with two decimals. Interface v1.1.0 firmware stores the value but does not use it in detection.
 - `cfar_table_first_frame` holds 19 levels in `1..9`. `cfar_table_second_frame` exists only in DR (0) and UDR (6). In single modes the GET omits it and the SET ignores it.
 - `SetDetectionThreshold` validates the level and tables before sending and returns `kInvalidParam` on a violation. `GetDetectionThreshold` returns `kProtocolError` when the response is out of range.
 - `Get/SetDetectionFilters`: the eight filter toggles of `AfiDetectionFilters`. The SDK sends all eight.
@@ -499,7 +499,7 @@ Call `RebindStorage()` after resizing or replacing `detections_storage` directly
 | `relative_velocity_radial` | `float` | Radial velocity (m/s) |
 | `relative_velocity_radial_error` | `float` | Radial velocity error (m/s) |
 
-An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 detections** (FW v3.1.1 sends at most 2048). The ambiguity domain covers radial velocity only (`radial_velocity_begin` / `radial_velocity_end`).
+An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 detections** (interface v1.1.0 firmware sends at most 2048). The ambiguity domain covers radial velocity only (`radial_velocity_begin` / `radial_velocity_end`).
 
 ### `AfiShiMessage` / `AfiSpiMessage` / `AfiStreamMeta`
 
@@ -534,7 +534,7 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 |-------|---------|
 | `kUnknown` (0) | Not determined yet |
 | `kV1_0` (1) | Interface v1.0.x, firmware 3.0.0 to 3.1.0: data streams and CSII only |
-| `kV1_1` (2) | Interface v1.1.0, firmware 3.1.1 |
+| `kV1_1` (2) | Interface v1.1.0 |
 
 ### `AfiRangeMode`
 
@@ -586,7 +586,7 @@ Vehicle dynamics sent by `SendVehicleInput()`. The SDK fills the interface heade
 | `steering_angle_rad` | `float` | Steering angle (rad) |
 | `gear_position` | `bts_csii_gear_position_t` | Gear position (default neutral) |
 
-FW v3.1.1 stores the received values; SOMC and the global timestamp do not change sensor behaviour.
+Interface v1.1.0 firmware stores the received values; SOMC and the global timestamp do not change sensor behaviour.
 
 ### `AfiSensorInfo` (Discovery)
 
@@ -738,7 +738,7 @@ enum class AfiStreamKind : uint8_t {
 
 #### `AfiDetectionFilters`
 
-Eight filter toggles with the interface defaults. FW v3.1.1 stores `filter_ego_specular`, `filter_upper_structure` and `filter_wheel_microdoppler` but does not build those stages.
+Eight filter toggles with the interface defaults. Interface v1.1.0 firmware stores `filter_ego_specular`, `filter_upper_structure` and `filter_wheel_microdoppler` but does not build those stages.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -764,7 +764,7 @@ Profile values are `0=gPTP`, `1=1588v2-L2`, `2=1588v2-UDP`.
 | `restart_required` | `bool` | Stored profile differs from the running one |
 | `domain` | `uint8_t` | PTP domain |
 | `priority1`, `priority2` | `uint8_t` | Firmware constant `255` (slave only) |
-| `state` | `string` | `"INIT"` / `"SLAVE"` / `"NOT_SYNCED"` (`"MASTER"` is defined but not reached by FW v3.1.1) |
+| `state` | `string` | `"INIT"` / `"SLAVE"` / `"NOT_SYNCED"` (`"MASTER"` is defined but not reached by interface v1.1.0 firmware) |
 | `state_code` | `uint8_t` | 1 = SLAVE, 2 = MASTER, 0 otherwise |
 | `offset_ns` | `int64_t` | Clock offset (ns) |
 | `mean_path_delay_ns` | `int64_t` | Mean path delay (ns) |
@@ -828,7 +828,7 @@ Profile values are `0=gPTP`, `1=1588v2-L2`, `2=1588v2-UDP`.
 | `fw_update_active` | `string` | Active firmware face (`"A"` / `"B"`) |
 | `fw_update_valid_a` | `bool` | Face A holds a verified image |
 | `fw_update_valid_b` | `bool` | Face B holds a verified image |
-| `fw_update_boot_count` | `uint32_t` | Stored boot count (not incremented by FW v3.1.1) |
+| `fw_update_boot_count` | `uint32_t` | Stored boot count (not incremented by interface v1.1.0 firmware) |
 | `boot_info_status` | `string` | `"ok"` / `"backup_used"` / `"default"` |
 
 ### Config Persistence Structs

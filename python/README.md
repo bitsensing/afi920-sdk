@@ -1,6 +1,6 @@
 # AFI920 Python SDK
 
-Python SDK for bitsensing AFI920 4D Imaging Radar (interface v1.1.0, firmware v3.1.1).
+Python SDK for bitsensing AFI920 4D Imaging Radar (interface v1.1.0).
 Python 3.8+, standard library only.
 
 ## Installation

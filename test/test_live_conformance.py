@@ -1,6 +1,6 @@
 """
 Live interface-conformance verification against real AFI920 sensors
-(interface v1.1.0, firmware v3.1.1).
+(interface v1.1.0).
 
 Per sensor:
   [D] Discovery     — required response fields, value sanity
@@ -57,7 +57,6 @@ from afi_sdk import streams  # noqa: E402
 
 PI = math.pi
 EXPECTED_IFACE_VERSION = (1, 1, 0)
-EXPECTED_FW = "3.1.1"
 VALID_DQ = {0, 1, 6}
 
 

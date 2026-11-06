@@ -258,7 +258,7 @@ class SomeipTpReassembler:
 
 RDI_HEADER_SIZE = 36
 RDI_DETECTION_SIZE = 51
-RDI_MAX_DETECTIONS = 8192        # protocol limit; FW v3.1.1 sends at most 2048
+RDI_MAX_DETECTIONS = 8192        # protocol limit; Interface v1.1.0 firmware sends at most 2048
 RDI_MAX_PAYLOAD_SIZE = RDI_HEADER_SIZE + RDI_MAX_DETECTIONS * RDI_DETECTION_SIZE
 
 

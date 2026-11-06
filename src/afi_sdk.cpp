@@ -305,7 +305,7 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
             return fail_init(kConnectFailed);
         }
     }
-    // PMOI (0x8005) is reserved on interface v1.1.0 and FW v3.1.1 does not
+    // PMOI (0x8005) is reserved on interface v1.1.0, whose firmware does not
     // send it. An unavailable PMOI endpoint disables only PMOI; Init continues
     // so the other streams are received.
     pmoi_active_ = false;
