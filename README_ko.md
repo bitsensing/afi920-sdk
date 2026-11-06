@@ -11,6 +11,8 @@ bitsensing **AFI920 4D Imaging Radar**용 C++ 및 Python SDK이다.
 
 > **Version 2.2.0**은 AFI920 인터페이스 v1.1.0(펌웨어 v3.1.1)을 기준으로 하며, 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)의 데이터도 수신한다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에서 확인한다.
 
+> **`feature/lsad_test` 브랜치**는 펌웨어 3.1.0 센서용 PMOI 시험 빌드이다. RDI/SHII/SPI와 함께, Discovery가 `objects_port`를 보고하는 센서의 PMOI(Event `0x8005`)를 수신한다. C++에서는 `AfiSdkConfig::enable_pmoi`와 `pmoi_port`로, Python에서는 `AfiSdkConfig.pmoi_port`와 `afi_sdk.streams.parse_pmoi_frame()`으로 사용한다. 펌웨어 3.1.0(인터페이스 v1.0.x)에서 Config API와 펌웨어 업데이트는 `kNotSupported`를 반환하며, 펌웨어 3.1.1은 PMOI를 송출하지 않는다.
+
 > **bitsensing** [bitsensing.com](https://bitsensing.com)
 
 ---
@@ -296,6 +298,7 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 | Discovery | 지원 | 지원 |
 | RDI, SHII, SPI 수신 | 지원 | 지원 (E2E CRC-64/XZ 허용) |
 | CSII | UDP 30501 | TCP 30501 |
+| PMOI 수신 (`feature/lsad_test` 전용) | 송출하지 않음 | Discovery가 `objects_port`를 보고할 때 지원 (FW 3.1.0, TCP 30512) |
 | Config API | 지원 | `kNotSupported` / `NOT_SUPPORTED`, 송신하지 않음 |
 | 펌웨어 업데이트 | 지원 | `kNotSupported` / `NOT_SUPPORTED`, 송신하지 않음 |
 

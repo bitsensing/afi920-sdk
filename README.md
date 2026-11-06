@@ -11,6 +11,8 @@ Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, the Co
 
 > **Version 2.2.0**: tracks AFI920 interface v1.1.0 (firmware v3.1.1) and receives data from interface v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
 
+> **Branch `feature/lsad_test`**: PMOI test build for sensors on firmware 3.1.0. Besides RDI/SHII/SPI it receives PMOI (Event `0x8005`) from sensors whose Discovery reports `objects_port`. Enable it with `AfiSdkConfig::enable_pmoi` and `pmoi_port` (C++) or `AfiSdkConfig.pmoi_port` with `afi_sdk.streams.parse_pmoi_frame()` (Python). On firmware 3.1.0 (interface v1.0.x) the Config API and firmware update return `kNotSupported`; firmware 3.1.1 does not send PMOI.
+
 > **bitsensing**: [bitsensing.com](https://bitsensing.com)
 
 ---
@@ -296,6 +298,7 @@ This SDK release receives data from sensors on interface v1.0.x (firmware 3.0.0 
 | Discovery | Supported | Supported |
 | RDI, SHII, SPI reception | Supported | Supported (E2E CRC-64/XZ accepted) |
 | CSII | UDP 30501 | TCP 30501 |
+| PMOI reception (`feature/lsad_test` only) | Not sent | Supported when Discovery reports `objects_port` (FW 3.1.0, TCP 30512) |
 | Config API | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
 | Firmware update | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
 
