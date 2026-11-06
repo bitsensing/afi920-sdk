@@ -92,11 +92,28 @@ int UdpReceiver::Receive(uint8_t* buf, size_t buf_size,
         return -1;
     }
 
+    if (filter_source_ && sender.sin_addr.s_addr != expected_source_.s_addr) {
+        ++foreign_drops_;
+        return 0;
+    }
+
     if (src_addr && src_addr_size > 0) {
         inet_ntop(AF_INET, &sender.sin_addr, src_addr, static_cast<socklen_t>(src_addr_size));
     }
 
     return n;
+}
+
+bool UdpReceiver::SetExpectedSource(const std::string& ip) {
+    filter_source_ = false;
+    if (ip.empty()) return true;
+    if (inet_pton(AF_INET, ip.c_str(), &expected_source_) != 1) {
+        AFI_LOG_WARN("UDP source filter: '%s' is not an IPv4 address; accepting any source",
+                     ip.c_str());
+        return false;
+    }
+    filter_source_ = true;
+    return true;
 }
 
 void UdpReceiver::Close() {
@@ -105,6 +122,69 @@ void UdpReceiver::Close() {
         socket_ = kInvalidSocket;
         AFI_LOG_DEBUG("UDP receiver closed");
     }
+}
+
+// ─── UdpSender ───
+
+UdpSender::~UdpSender() {
+    Disconnect();
+}
+
+int UdpSender::Connect(const std::string& ip, uint16_t port) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (socket_ != kInvalidSocket) {
+        platform_close_socket(socket_);
+        socket_ = kInvalidSocket;
+    }
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) != 1) {
+        AFI_LOG_ERROR("UdpSender: invalid IP address: %s", ip.c_str());
+        return -1;
+    }
+
+    socket_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_ == kInvalidSocket) {
+        AFI_LOG_ERROR("UdpSender: failed to create socket: %d", platform_socket_error());
+        return -1;
+    }
+
+    if (::connect(socket_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+        AFI_LOG_ERROR("UdpSender: connect to %s:%d failed: %d",
+                      ip.c_str(), port, platform_socket_error());
+        platform_close_socket(socket_);
+        socket_ = kInvalidSocket;
+        return -1;
+    }
+
+    AFI_LOG_INFO("UDP sender ready for %s:%d", ip.c_str(), port);
+    return 0;
+}
+
+void UdpSender::Disconnect() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (socket_ != kInvalidSocket) {
+        platform_close_socket(socket_);
+        socket_ = kInvalidSocket;
+    }
+}
+
+int UdpSender::Send(const uint8_t* data, size_t len) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (socket_ == kInvalidSocket || !data) return -1;
+
+    const int n = ::send(socket_, reinterpret_cast<const char*>(data),
+                         static_cast<int>(len), 0);
+    if (n < 0 || static_cast<size_t>(n) != len) {
+        // A connected UDP socket reports an earlier ICMP unreachable on the
+        // next call. The socket stays usable, so keep it open.
+        AFI_LOG_WARN("UdpSender: send failed: %d", platform_socket_error());
+        return -1;
+    }
+    return 0;
 }
 
 } // namespace afi

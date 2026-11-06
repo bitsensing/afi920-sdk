@@ -88,8 +88,8 @@ static void print_sensor(size_t idx, const afi::AfiSensorInfo& s) {
     printf("  IP:             %s:%d\n", s.ip.c_str(), s.port);
     printf("  Serial:         %s\n", s.serial_number.c_str());
     printf("  Model:          %s\n", s.model.c_str());
-    printf("  SW Version:     %s (bl=%s drv=%s fw=%s)\n", s.software_version.c_str(),
-           s.bootloader_hash.c_str(), s.driver_hash.c_str(), s.fw_hash.c_str());
+    printf("  SW Version:     %s (bl=%s fw=%s)\n", s.software_version.c_str(),
+           s.bootloader_hash.c_str(), s.fw_hash.c_str());
     printf("  HW Version:     %s\n", s.hw_version.c_str());
     printf("  MAC:            %s\n", s.mac_address.c_str());
     printf("  Subnet:         %s\n", s.subnet_mask.c_str());

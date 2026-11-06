@@ -5,8 +5,8 @@ Supports TCP (default) and UDP transport modes.
 TCP: connects to sensor and reads SOME/IP framed messages.
 UDP: listens on local port for SOME/IP-TP segmented messages.
 
-Protocol v3.0: the SOME/IP payload starts with a 20B E2E Profile 7
-header (CRC-64/XZ), followed by the ISO 23150 RDI payload
+Interface v1.1.0: the SOME/IP payload starts with a 20B E2E header
+(CRC-32 over the body), followed by the ISO 23150 RDI payload
 (36B header + 51B per detection). Parsing lives in afi_sdk.streams.
 
 Usage:
@@ -92,21 +92,28 @@ def main():
 
     print(f"Sensor: {sensor_ip}  Transport: {transport.upper()}")
 
-    # Configure sensor protocol via Config API.
+    # Select the sensor's detection transport via the Config API.
     # Protocol-only partial update: never touch the destination IP —
     # a unicast destination makes the sensor reject TCP clients connecting
-    # from any other host IP (multi-NIC pitfall).
+    # from any other host IP (multi-NIC pitfall). The SET needs the
+    # diagnostic access mode, is stored in NVM and applies after a restart.
     try:
-        from afi_sdk import AfiSdk, AfiSdkConfig
+        from afi_sdk import AfiSdk, AfiSdkConfig, AccessMode, OK
         sdk = AfiSdk()
-        if sdk.init(AfiSdkConfig(sensor_ip=sensor_ip)) == 0:
+        if sdk.init(AfiSdkConfig(sensor_ip=sensor_ip)) == OK:
             net = sdk.get_network_config() or {}
-            if net.get("detection_protocol") != transport:
-                sdk.set_network_config(detection_protocol=transport)
-                print(f"Sensor detection stream switched to {transport.upper()}")
-                time.sleep(1.0)  # stream channel reconnects after the change
-            else:
+            if net.get("detection_protocol") == transport:
                 print(f"Sensor detection stream already {transport.upper()}")
+            elif (sdk.enter_mode(AccessMode.DIAGNOSTIC) != OK
+                  or sdk.set_network_config(detection_protocol=transport) is None):
+                print(f"Warning: could not switch the detection stream to "
+                      f"{transport.upper()} (err={sdk.last_error})")
+            elif sdk.restart() != OK or sdk.reconnect(timeout_s=60.0) != OK:
+                print(f"Warning: {transport.upper()} is stored but the restart "
+                      f"failed (err={sdk.last_error}); it applies at the next restart")
+            else:
+                print(f"Sensor detection stream switched to {transport.upper()} "
+                      f"(sensor restarted)")
             sdk.close()
     except Exception as e:
         print(f"Warning: could not configure sensor ({e})")
@@ -130,7 +137,7 @@ def main():
     frame_count = 0
     total_detections = 0
     e2e_errors = 0
-    prev_counter = -1
+    prev_e2e_counter = -1
     lost_packets = 0
     total_packets = 0
     start = time.monotonic()
@@ -178,7 +185,7 @@ def main():
         e2e, iso_payload = strip_e2e(frame_data)
         if e2e is None:
             continue
-        if not e2e.get("crc_ok", True):
+        if not e2e["ok"]:
             e2e_errors += 1
 
         # Got a complete RDI frame
@@ -190,17 +197,23 @@ def main():
         num_det = hdr["num_detections"]
         total_detections += num_det
 
-        # Packet loss detection
+        # Loss detection on the E2E Counter, which advances once per send
+        # slot. MessageCounter repeats when the sensor resends a scan
+        # (DataQualifier 6), so its gaps do not count lost frames. Only frames
+        # that passed the E2E check advance the count; a decrease (sensor
+        # restart) starts a new baseline.
         counter = hdr["message_counter"]
         total_packets += 1
-        if prev_counter >= 0:
-            gap = counter - prev_counter - 1
-            if 0 < gap < 1000:
-                lost_packets += gap
-                print(f"*** Packet loss detected: {gap} frames lost "
-                      f"({lost_packets} lost / {total_packets + lost_packets} total "
-                      f"= {100.0 * lost_packets / (total_packets + lost_packets):.2f}%)")
-        prev_counter = counter
+        if e2e["ok"]:
+            e2e_counter = e2e["counter"]
+            if prev_e2e_counter >= 0 and e2e_counter > prev_e2e_counter:
+                gap = e2e_counter - prev_e2e_counter - 1
+                if gap > 0:
+                    lost_packets += gap
+                    print(f"*** Packet loss detected: {gap} frames lost "
+                          f"({lost_packets} lost / {total_packets + lost_packets} total "
+                          f"= {100.0 * lost_packets / (total_packets + lost_packets):.2f}%)")
+            prev_e2e_counter = e2e_counter
 
         # Print every 10th frame
         if frame_count % 10 == 0:
@@ -214,7 +227,7 @@ def main():
                           f"az={det['azimuth']:.3f} rad  "
                           f"el={det['elevation']:.3f} rad  "
                           f"v={det['radial_velocity']:.2f} m/s  "
-                          f"rcs={det['rcs']:.1f} dBm2")
+                          f"rcs={det['rcs']:.1f} dBsm")
 
     sock.close()
     elapsed = time.monotonic() - start
@@ -224,7 +237,8 @@ def main():
     print(f"Duration:         {elapsed:.0f} seconds")
     print(f"Frames received:  {frame_count}")
     print(f"Total detections: {total_detections}")
-    print(f"E2E CRC errors:   {e2e_errors}")
+    print(f"E2E check errors: {e2e_errors}")
+    print(f"Frames lost:      {lost_packets}")
     if elapsed > 0:
         print(f"Avg frame rate:   {frame_count / elapsed:.1f} fps")
 

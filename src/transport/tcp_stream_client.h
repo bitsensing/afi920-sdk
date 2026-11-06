@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace afi {
 
@@ -53,6 +54,20 @@ public:
      * @return Number of bytes received, negative on error/disconnect
      */
     int Receive(uint8_t* buf, size_t buf_size);
+
+    /**
+     * @brief Receive one complete SOME/IP message into a dynamically sized buffer
+     *
+     * The frame size is taken from the SOME/IP Length field.  This keeps stream
+     * reception independent of the currently compiled RDI/SHII/SPI/Raw
+     * Data domain schema.  max_frame_size is only a transport memory-safety
+     * ceiling; it is not a typed payload limit.
+     *
+     * @param frame          Output buffer, resized to the complete frame
+     * @param max_frame_size Maximum accepted complete SOME/IP frame size
+     * @return Number of bytes received, negative on error/disconnect
+     */
+    int Receive(std::vector<uint8_t>& frame, size_t max_frame_size);
 
     /**
      * @brief Close the TCP connection

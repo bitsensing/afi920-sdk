@@ -30,6 +30,7 @@ void someip_tp_deserialize(const uint8_t* buf, SomeipTpHeader& out) {
     // Bits 31:4 = offset in 16-byte units, bit 0 = more_segments
     out.offset_bytes  = (raw >> 4) * 16;
     out.more_segments = (raw & 0x01) != 0;
+    out.valid = (raw & 0x0Eu) == 0;
 }
 
 } // namespace afi

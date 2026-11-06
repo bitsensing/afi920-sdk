@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "protocol/csii_builder.h"
 #include "protocol/someip.h"
+#include "protocol/e2e.h"
 #include "bts_iso23150_e2e.h"
 #include <cstring>
 
@@ -33,8 +34,8 @@ int csii_build_frame(const AfiVehicleInput& input,
     uint8_t* p = out + kIsoOffset;
 
     // Common Interface Header (24B)
-    p[0] = 1;  // interface_version major
-    p[1] = 0;  //                   minor
+    p[0] = 1;  // interface_version major (v1.1.0)
+    p[1] = 1;  //                   minor
     p[2] = 0;  //                   patch
     p[3] = BTS_IID_COMMON_SENSOR_INPUT;
     p[4] = BTS_CSII_NUM_VALID_SERVING_SENSORS;
@@ -66,11 +67,9 @@ int csii_build_frame(const AfiVehicleInput& input,
     pack_le_f32(p + 74, input.steering_angle_rad);
     p[78] = static_cast<uint8_t>(input.gear_position);
 
-    // ─── E2E Profile 7 header (20B, big-endian) + CRC-64/XZ ───
-    bts_e2e_build_header(out + kE2eOffset, BTS_E2E_DATA_ID_CSII, counter,
-                         BTS_CSII_SIZE);
-    bts_e2e_apply_crc_contig(out + kE2eOffset,
-                             BTS_E2E_HEADER_SIZE + BTS_CSII_SIZE);
+    // ─── E2E header (20B, big-endian), CRC-32 over the ISO body ───
+    e2e_write_header(out + kE2eOffset, BTS_E2E_DATA_ID_CSII, counter,
+                     out + kIsoOffset, BTS_CSII_SIZE);
 
     // ─── SOME/IP header (16B, big-endian) ───
     // Length covers request-id..payload: 8 + E2E(20) + ISO(79)

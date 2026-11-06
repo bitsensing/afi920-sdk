@@ -25,18 +25,34 @@ Copyright (c) 2026 bitsensing Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 from afi_sdk._sdk import (
     AfiSdk,
     AfiSdkConfig,
     RangeMode,
+    AccessMode,
     OK,
+    NOT_INITIALIZED,
+    CONNECT_FAILED,
     DISCONNECTED,
+    INVALID_PARAM,
+    INTERNAL_ERROR,
+    BUSY,
+    SESSION_REQUIRED,
+    ACCESS_DENIED,
+    INVALID_STATE,
+    error_from_result,
     TIMEOUT,
     PROTOCOL_ERROR,
     SENSOR_ERROR,
     NOT_SUPPORTED,
+)
+from afi_sdk.someip import (
+    INTERFACE_GEN_UNKNOWN,
+    INTERFACE_GEN_V1_0,
+    INTERFACE_GEN_V1_1,
+    discovery_generation,
 )
 from afi_sdk import streams
 
@@ -44,11 +60,25 @@ __all__ = [
     "AfiSdk",
     "AfiSdkConfig",
     "RangeMode",
+    "AccessMode",
     "streams",
     "OK",
+    "NOT_INITIALIZED",
+    "CONNECT_FAILED",
     "DISCONNECTED",
+    "INVALID_PARAM",
+    "INTERNAL_ERROR",
+    "BUSY",
+    "SESSION_REQUIRED",
+    "ACCESS_DENIED",
+    "INVALID_STATE",
+    "error_from_result",
     "TIMEOUT",
     "PROTOCOL_ERROR",
     "SENSOR_ERROR",
     "NOT_SUPPORTED",
+    "INTERFACE_GEN_UNKNOWN",
+    "INTERFACE_GEN_V1_0",
+    "INTERFACE_GEN_V1_1",
+    "discovery_generation",
 ]

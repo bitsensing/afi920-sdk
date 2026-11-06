@@ -68,8 +68,7 @@ def print_sensor(idx: int, s: dict):
     print(f"  Serial:         {s.get('serial_number', '?')}")
     print(f"  Model:          {s.get('model_name', '?')}")
     print(f"  SW Version:     {s.get('software_version', '?')} "
-          f"(bl={s.get('bootloader_hash', '?')} drv={s.get('driver_hash', '?')} "
-          f"fw={s.get('fw_hash', '?')})")
+          f"(bl={s.get('bootloader_hash', '?')} fw={s.get('fw_hash', '?')})")
     print(f"  HW Version:     {s.get('hw_version', '?')}")
     print(f"  MAC:            {s.get('mac_address', '?')}")
     print(f"  Range Mode:     {s.get('range_mode_name', RangeMode.name(mode))} ({mode})")

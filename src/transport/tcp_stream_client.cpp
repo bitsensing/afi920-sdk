@@ -11,6 +11,8 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <limits>
+#include <new>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -163,6 +165,49 @@ int TcpStreamClient::Receive(uint8_t* buf, size_t buf_size) {
         return -1;
     }
 
+    return static_cast<int>(total);
+}
+
+int TcpStreamClient::Receive(std::vector<uint8_t>& frame,
+                             size_t max_frame_size) {
+    if (!open_.load()) {
+        return try_reconnect();
+    }
+
+    // Read the fixed SOME/IP prefix first, then size the destination from the
+    // transport length. Domain parsers never participate in this decision.
+    uint8_t hdr[8];
+    if (recv_exact(hdr, sizeof(hdr)) != 0) {
+        open_.store(false);
+        return -1;
+    }
+
+    const uint32_t length = (static_cast<uint32_t>(hdr[4]) << 24) |
+                            (static_cast<uint32_t>(hdr[5]) << 16) |
+                            (static_cast<uint32_t>(hdr[6]) << 8)  |
+                            static_cast<uint32_t>(hdr[7]);
+    const size_t total = sizeof(hdr) + static_cast<size_t>(length);
+    if (total > max_frame_size ||
+        total > static_cast<size_t>((std::numeric_limits<int>::max)())) {
+        AFI_LOG_ERROR("TCP message outside transport limit: %zu (max %zu)",
+                      total, max_frame_size);
+        open_.store(false);
+        return -1;
+    }
+
+    try {
+        frame.resize(total);
+    } catch (const std::bad_alloc&) {
+        AFI_LOG_ERROR("TCP message allocation failed: %zu bytes", total);
+        open_.store(false);
+        return -1;
+    }
+    std::memcpy(frame.data(), hdr, sizeof(hdr));
+    if (recv_exact(frame.data() + sizeof(hdr),
+                   static_cast<size_t>(length)) != 0) {
+        open_.store(false);
+        return -1;
+    }
     return static_cast<int>(total);
 }
 

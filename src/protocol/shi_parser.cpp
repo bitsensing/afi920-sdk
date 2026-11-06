@@ -12,6 +12,7 @@ namespace afi {
 static constexpr size_t kShiMinSize = 32;
 
 int ShiParser::Parse(const uint8_t* payload, size_t len, AfiShiMessage& msg) {
+    msg = {};
     if (!payload || len < kShiMinSize) {
         AFI_LOG_ERROR("SHII payload too short: %zu < %zu", len, kShiMinSize);
         return -1;
@@ -37,9 +38,10 @@ int ShiParser::Parse(const uint8_t* payload, size_t len, AfiShiMessage& msg) {
     // Operation Modes (1 + N)
     uint8_t n_op = p[off++];
     if (n_op > BTS_SHI_MAX_OPERATION_MODES) {
-        AFI_LOG_WARN("SHII operation mode count %u exceeds max %u, clamping",
-                     n_op, BTS_SHI_MAX_OPERATION_MODES);
-        n_op = BTS_SHI_MAX_OPERATION_MODES;
+        AFI_LOG_ERROR("SHII operation mode count %u exceeds max %u",
+                      static_cast<unsigned>(n_op),
+                      static_cast<unsigned>(BTS_SHI_MAX_OPERATION_MODES));
+        return -1;
     }
     if (off + n_op + 4 > len) {
         AFI_LOG_ERROR("SHII payload truncated in operation modes");
@@ -61,9 +63,10 @@ int ShiParser::Parse(const uint8_t* payload, size_t len, AfiShiMessage& msg) {
     if (off >= len) return -1;
     uint8_t n_in = p[off++];
     if (n_in > BTS_SHI_MAX_INPUT_SIGNALS) {
-        AFI_LOG_WARN("SHII input signal count %u exceeds max %u, clamping",
-                     n_in, BTS_SHI_MAX_INPUT_SIGNALS);
-        n_in = BTS_SHI_MAX_INPUT_SIGNALS;
+        AFI_LOG_ERROR("SHII input signal count %u exceeds max %u",
+                      static_cast<unsigned>(n_in),
+                      static_cast<unsigned>(BTS_SHI_MAX_INPUT_SIGNALS));
+        return -1;
     }
     if (off + 2u * n_in + 1 > len) {
         AFI_LOG_ERROR("SHII payload truncated in input signals");
@@ -75,16 +78,17 @@ int ShiParser::Parse(const uint8_t* payload, size_t len, AfiShiMessage& msg) {
     std::memcpy(msg.sensor_input_signal_statuses, p + off, n_in);
     off += n_in;
 
-    // Time Sync (1; offset value field removed in v3.0)
+    // Time Sync (1 byte; no offset value field)
     msg.sensor_time_sync = static_cast<bts_shi_sensor_time_sync_t>(p[off++]);
 
     // Sensor Calibration (1 + 3N: component, status, state parallel arrays)
     if (off >= len) return -1;
     uint8_t n_cal = p[off++];
     if (n_cal > BTS_SHI_MAX_CALIBRATION_COMPONENTS) {
-        AFI_LOG_WARN("SHII calibration count %u exceeds max %u, clamping",
-                     n_cal, BTS_SHI_MAX_CALIBRATION_COMPONENTS);
-        n_cal = BTS_SHI_MAX_CALIBRATION_COMPONENTS;
+        AFI_LOG_ERROR("SHII calibration count %u exceeds max %u",
+                      static_cast<unsigned>(n_cal),
+                      static_cast<unsigned>(BTS_SHI_MAX_CALIBRATION_COMPONENTS));
+        return -1;
     }
     if (off + 3u * n_cal > len) {
         AFI_LOG_ERROR("SHII payload truncated in calibration section");
@@ -96,6 +100,12 @@ int ShiParser::Parse(const uint8_t* payload, size_t len, AfiShiMessage& msg) {
     std::memcpy(msg.sensor_calibration_statuses, p + off, n_cal);
     off += n_cal;
     std::memcpy(msg.sensor_calibration_states, p + off, n_cal);
+    off += n_cal;
+
+    if (off != len) {
+        AFI_LOG_ERROR("SHII payload length mismatch: parsed=%zu actual=%zu", off, len);
+        return -1;
+    }
 
     return 0;
 }

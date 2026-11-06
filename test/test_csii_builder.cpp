@@ -73,7 +73,7 @@ TEST(iso_payload_fields) {
     csii_build_frame(input, 11, 2, 987654321ull, frame);
 
     const uint8_t* p = frame + 16 + 20;  // ISO payload
-    CHECK(p[0] == 1 && p[1] == 0 && p[2] == 0);   // version 1.0.0
+    CHECK(p[0] == 1 && p[1] == 1 && p[2] == 0);   // version 1.1.0
     CHECK(p[3] == 0x0E);                           // IID_COMMON_SENSOR_INPUT
     CHECK(p[4] == 1);                              // serving sensors
     CHECK(p[5] == 4);                              // sensor id

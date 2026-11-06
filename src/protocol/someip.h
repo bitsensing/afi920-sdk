@@ -18,6 +18,8 @@ static constexpr uint16_t kSomeipServiceId        = 0x6000;
 static constexpr size_t   kSomeipHeaderSize        = 16;
 static constexpr size_t   kSomeipTpHeaderSize      = 4;
 static constexpr size_t   kSomeipTpChunkSize       = 1392;
+static constexpr uint8_t  kSomeipProtocolVersion   = 0x01;
+static constexpr uint8_t  kSomeipInterfaceVersion  = 0x01;
 static constexpr uint8_t  kSomeipMsgTypeRequest    = 0x00;
 static constexpr uint8_t  kSomeipMsgTypeNotify     = 0x02;
 static constexpr uint8_t  kSomeipMsgTypeResponse   = 0x80;
@@ -27,23 +29,22 @@ static constexpr uint8_t  kSomeipReturnOk          = 0x00;
 
 // ─── Event IDs ───
 
-static constexpr uint16_t kEventCsii    = 0x8001;  // Host → Radar (TCP only)
+static constexpr uint16_t kEventCsii    = 0x8001;  // Host → Radar (UDP on v1.1.0, TCP on v1.0.x)
 static constexpr uint16_t kEventRdi     = 0x8002;
 static constexpr uint16_t kEventShii    = 0x8003;
 static constexpr uint16_t kEventSpi     = 0x8004;
 
-// ─── E2E Profile 7 (RDI/SHII/SPI/CSII payloads) ───
+// ─── E2E header, 20B CRC-32 (RDI/SHII/SPI/CSII/Config API) ───
 
 static constexpr size_t   kE2eHeaderSize = 20;
 
-// ─── Method IDs (Config API, protocol v3.0 registry) ───
+// ─── Method IDs (Config API, interface v1.1.0 registry) ───
 
 enum class MethodId : uint16_t {
     // Category 1: Device Info & Status (0x0010~0x0016)
     kGetDeviceInfo         = 0x0010,
     kGetSensorStatus       = 0x0011,
     kGetDiagnosticInfo     = 0x0012,
-    kClearFaultLog         = 0x0013,
     kRestart               = 0x0014,
     kResetAllSettings      = 0x0015,
     kGetCommandHistoryInfo = 0x0016,
@@ -56,13 +57,11 @@ enum class MethodId : uint16_t {
     kGetRangeMode          = 0x0030,
     kSetRangeMode          = 0x0031,
 
-    // Category 4: Detection Configuration (0x0040~0x0045)
+    // Category 4: Detection Configuration (0x0040~0x0043)
     kGetDetectionThreshold = 0x0040,
     kSetDetectionThreshold = 0x0041,
     kGetDetectionFilters   = 0x0042,
     kSetDetectionFilters   = 0x0043,
-    kGetDetectionDensity   = 0x0044,
-    kSetDetectionDensity   = 0x0045,
 
     // Category 5: Time Synchronization (0x0050~0x0051)
     kGetPtpConfig          = 0x0050,
@@ -76,14 +75,27 @@ enum class MethodId : uint16_t {
     kGetSensorPosition     = 0x0074,
     kSetSensorPosition     = 0x0075,
 
-    // Category 9: Config Persistence (0x0090~0x0092)
-    kSaveConfig            = 0x0090,
+    // Category 8: Firmware Update (0x0080~0x0087)
+    kFirmwareUpdateStart   = 0x0080,
+    kFirmwareDataChunk     = 0x0081,
+    kFirmwareUpdateCommit  = 0x0082,
+    kFirmwareUpdateStatus  = 0x0083,
+    kFirmwareUpdateAbort   = 0x0084,
+    kFirmwareSwitchSlot    = 0x0085,
+    kFirmwareUpdateReboot  = 0x0086,
+    kGetBootInfo           = 0x0087,
+
+    // Category 9: Config Persistence (0x0091~0x0092; 0x0090 is reserved)
     kGetConfigStatus       = 0x0091,
     kResetConfigDefaults   = 0x0092,
 
     // Discovery (UDP 30520, separate channel from Config API)
     kDiscoverRequest       = 0x00C0,
     kDiscoverResponse      = 0x00C1,
+
+    // Category 11: Access Mode (0x00E0~0x00E1)
+    kGetMode               = 0x00E0,
+    kSetMode               = 0x00E1,
 };
 
 // ─── Transport Mode ───
@@ -139,6 +151,7 @@ inline uint32_t someip_payload_size(const SomeipHeader& hdr, bool has_tp) {
 struct SomeipTpHeader {
     uint32_t offset_bytes;
     bool     more_segments;
+    bool     valid;          ///< Reserved bits 1..3 are zero
 };
 
 /**

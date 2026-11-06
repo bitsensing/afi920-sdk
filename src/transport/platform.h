@@ -20,6 +20,11 @@
 
     inline int platform_socket_error() { return WSAGetLastError(); }
 
+    /// True when the last failed recv/send ended on SO_RCVTIMEO/SO_SNDTIMEO.
+    inline bool platform_last_error_is_timeout() {
+        return WSAGetLastError() == WSAETIMEDOUT;
+    }
+
     inline void platform_close_socket(socket_t s) {
         if (s != kInvalidSocket) closesocket(s);
     }
@@ -59,6 +64,11 @@
     static constexpr socket_t kInvalidSocket = -1;
 
     inline int platform_socket_error() { return errno; }
+
+    /// True when the last failed recv/send ended on SO_RCVTIMEO/SO_SNDTIMEO.
+    inline bool platform_last_error_is_timeout() {
+        return errno == EAGAIN || errno == EWOULDBLOCK;
+    }
 
     inline void platform_close_socket(socket_t s) {
         if (s != kInvalidSocket) ::close(s);

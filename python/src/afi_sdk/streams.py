@@ -1,11 +1,14 @@
 """
-AFI920 data stream helpers — E2E Profile 7 and ISO 23150 payload parsing.
+AFI920 data stream helpers — E2E header (CRC-32) and ISO 23150 payload parsing.
 
-Protocol v3.0 wire format:
+Interface v1.1.0 wire format:
   SOME/IP header (16B, BE) + E2E header (20B, BE) + ISO 23150 payload (LE)
 
-E2E header layout: CRC-64/XZ (8B) | Length (4B) | Counter (4B) | Data ID (4B)
-The CRC protects frame bytes [8:] (header tail + ISO payload).
+E2E header layout: CRC high (4B, 0) | CRC-32 (4B) | Length (4B) | Counter (4B)
+| Data ID (4B). The IEEE 802.3 CRC-32 (zlib.crc32) covers the body only.
+Interface v1.0.x (firmware 3.0.0 to 3.1.0) keeps the layout but puts a
+CRC-64/XZ in the first 8 bytes, over Length, Counter, Data ID and the body;
+``strip_e2e`` accepts it on receive (this SDK release only).
 
 Dependencies: Python 3.8+ (stdlib only)
 
@@ -13,27 +16,48 @@ Copyright (c) 2026 bitsensing Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 """
 
+import logging
 import struct
 import time
-from typing import Optional, Tuple
+import zlib
+from typing import Dict, Optional, Tuple
 
-from afi_sdk.someip import SERVICE_ID, EVENT_CSII
+from afi_sdk.someip import (SERVICE_ID, EVENT_CSII, INTERFACE_GEN_V1_0,
+                            INTERFACE_GEN_V1_1)
 
-# ── E2E Profile 7 ──
+_log = logging.getLogger("afi_sdk.streams")
+
+# ── E2E header (System Spec §7) ──
 
 E2E_HEADER_SIZE = 20
+E2E_SERVICE_PREFIX = 0x6000
 
 E2E_DATA_ID_CSII = 0x60008001
 E2E_DATA_ID_RDI  = 0x60008002
 E2E_DATA_ID_SHII = 0x60008003
 E2E_DATA_ID_SPI  = 0x60008004
 
-# CRC-64/XZ (AUTOSAR Crc_CalculateCRC64): poly 0x42F0E1EBA9EA3693 (reflected
-# 0xC96C5795D7870F42), init/xorout all-ones, refin/refout true.
-# KAT: crc64_xz(b"123456789") == 0x995DC9BBDF1939FA
+# IEEE 802.3 CRC-32 (zlib): poly 0x04C11DB7 reflected, init/xorout all-ones.
+CRC32_CHECK = 0xCBF43926
+
+
+def e2e_data_id(sub16: int) -> int:
+    """E2E Data ID: Service 0x6000 in the high half, channel id in the low half.
+
+    The Config API uses the Method ID.
+    """
+    return (E2E_SERVICE_PREFIX << 16) | (sub16 & 0xFFFF)
+
+
+def crc32_ieee(data: bytes) -> int:
+    """IEEE 802.3 CRC-32, identical to ``zlib.crc32``."""
+    return zlib.crc32(data) & 0xFFFFFFFF
+
+
+assert crc32_ieee(b"123456789") == CRC32_CHECK, "CRC-32 self-test failed"
+
+
 _CRC64_REFLECTED_POLY = 0xC96C5795D7870F42
-_CRC64_INIT = 0xFFFFFFFFFFFFFFFF
-_CRC64_XOROUT = 0xFFFFFFFFFFFFFFFF
 _MASK64 = 0xFFFFFFFFFFFFFFFF
 CRC64_CHECK = 0x995DC9BBDF1939FA
 
@@ -52,11 +76,11 @@ _CRC64_TABLE = _make_crc64_table()
 
 
 def crc64_xz(data: bytes) -> int:
-    """AUTOSAR Crc_CalculateCRC64 (CRC-64/XZ), table-driven reflected."""
-    crc = _CRC64_INIT
+    """CRC-64/XZ, the interface v1.0.x E2E CRC (v1.1.0 uses crc32_ieee)."""
+    crc = _MASK64
     for b in data:
         crc = ((crc >> 8) ^ _CRC64_TABLE[(crc ^ b) & 0xFF]) & _MASK64
-    return crc ^ _CRC64_XOROUT
+    return crc ^ _MASK64
 
 
 assert crc64_xz(b"123456789") == CRC64_CHECK, "CRC-64/XZ self-test failed"
@@ -65,47 +89,176 @@ assert crc64_xz(b"123456789") == CRC64_CHECK, "CRC-64/XZ self-test failed"
 def parse_e2e(frame: bytes) -> Optional[dict]:
     """Parse the 20B E2E header at the start of `frame`.
 
-    Returns dict {crc, length, counter, data_id} or None if too short.
+    Returns dict {crc_high, crc, length, counter, data_id} or None if too short.
     """
     if len(frame) < E2E_HEADER_SIZE:
         return None
-    crc, length, counter, data_id = struct.unpack(">QIII", frame[:E2E_HEADER_SIZE])
-    return {"crc": crc, "length": length, "counter": counter, "data_id": data_id}
+    crc_high, crc, length, counter, data_id = struct.unpack(
+        ">IIIII", frame[:E2E_HEADER_SIZE])
+    return {"crc_high": crc_high, "crc": crc, "length": length,
+            "counter": counter, "data_id": data_id}
 
 
-def strip_e2e(frame: bytes, validate: bool = True
+_e2e_failures: Dict[int, int] = {}
+
+
+def strip_e2e(frame: bytes, validate: bool = True,
+              expected_data_id: Optional[int] = None
               ) -> Tuple[Optional[dict], bytes]:
-    """Strip (and optionally CRC-verify) the E2E header from a stream payload.
+    """Strip and verify the E2E header of a payload.
+
+    Verification never removes the body: a failed check is logged as a
+    warning and the body after the 20B header is still returned.
 
     Args:
-        frame: SOME/IP payload starting at the E2E header
-        validate: verify CRC-64/XZ over frame[8:]
+        frame: payload starting at the E2E header
+        validate: recompute the CRC (CRC-32 over the body; CRC-64/XZ over
+            Length, Counter, Data ID and the body when the high word is not 0)
+        expected_data_id: channel Data ID, or None to skip the identity check
 
     Returns:
-        (e2e_dict_with["crc_ok"], iso_payload). e2e_dict is None and payload
-        empty if the frame is shorter than the E2E header.
+        (e2e_dict, body). The dictionary carries ``length_ok``,
+        ``data_id_ok``, ``crc_zero``, ``crc_ok`` (when ``validate``), ``ok``
+        (all checks passed) and ``generation`` (``INTERFACE_GEN_V1_1`` when
+        the CRC high word is 0, ``INTERFACE_GEN_V1_0`` otherwise). It is None
+        and the body is empty only when the frame is shorter than the E2E
+        header.
     """
     e2e = parse_e2e(frame)
     if e2e is None:
         return None, b""
+    body = frame[E2E_HEADER_SIZE:]
+    e2e["length_ok"] = (e2e["length"] == len(body))
+    e2e["data_id_ok"] = (
+        expected_data_id is None or e2e["data_id"] == expected_data_id
+    )
+    # System Spec §7.5: a zero CRC field never counts as a pass.
+    e2e["crc_zero"] = (e2e["crc_high"] == 0 and e2e["crc"] == 0)
+    e2e["generation"] = (INTERFACE_GEN_V1_1 if e2e["crc_high"] == 0
+                         else INTERFACE_GEN_V1_0)
+    ok = e2e["length_ok"] and e2e["data_id_ok"]
     if validate:
-        e2e["crc_ok"] = (crc64_xz(frame[8:]) == e2e["crc"])
-    return e2e, frame[E2E_HEADER_SIZE:]
+        if e2e["crc_high"] == 0:
+            e2e["crc_ok"] = (not e2e["crc_zero"]
+                             and crc32_ieee(body) == e2e["crc"])
+        else:
+            e2e["crc_ok"] = (crc64_xz(frame[8:])
+                             == (e2e["crc_high"] << 32) | e2e["crc"])
+        ok = ok and e2e["crc_ok"]
+    e2e["ok"] = ok
+    if not ok:
+        key = expected_data_id if expected_data_id is not None else e2e["data_id"]
+        n = _e2e_failures.get(key, 0) + 1
+        _e2e_failures[key] = n
+        if n <= 10 or n % 1000 == 0:
+            _log.warning(
+                "E2E check failed for data_id 0x%08X (length_ok=%s data_id_ok=%s "
+                "crc_ok=%s crc_zero=%s counter=%d failures=%d); body kept",
+                e2e["data_id"], e2e["length_ok"], e2e["data_id_ok"],
+                e2e.get("crc_ok"), e2e["crc_zero"], e2e["counter"], n)
+    return e2e, body
 
 
 def build_e2e_header(data_id: int, counter: int, payload: bytes) -> bytes:
-    """Build a 20B E2E header (with computed CRC) for `payload`."""
-    tail = struct.pack(">III", len(payload) & 0xFFFFFFFF,
-                       counter & 0xFFFFFFFF, data_id & 0xFFFFFFFF)
-    crc = crc64_xz(tail + payload)
-    return struct.pack(">Q", crc) + tail
+    """Build a 20B E2E header (CRC-32 over `payload`) for `payload`."""
+    return struct.pack(">IIIII", 0, crc32_ieee(payload),
+                       len(payload) & 0xFFFFFFFF, counter & 0xFFFFFFFF,
+                       data_id & 0xFFFFFFFF)
+
+
+# ── SOME/IP-TP receive helper (UDP data streams) ──
+
+class SomeipTpReassembler:
+    """Bounded, session-aware SOME/IP-TP payload reassembler."""
+
+    def __init__(self, max_payload_size: int, max_sessions: int = 8,
+                 max_segment_size: int = 1392):
+        if max_payload_size <= 0 or max_sessions <= 0 or max_segment_size <= 0:
+            raise ValueError("reassembly limits must be positive")
+        self.max_payload_size = max_payload_size
+        self.max_sessions = max_sessions
+        self.max_segment_size = max_segment_size
+        self._assemblies = {}
+
+    def reset(self, session_id: Optional[int] = None):
+        """Discard one session, or every incomplete message if omitted."""
+        if session_id is None:
+            self._assemblies.clear()
+        else:
+            self._assemblies.pop(session_id, None)
+
+    @staticmethod
+    def _add_range(ranges, begin: int, end: int):
+        merged = []
+        for current in sorted(ranges + [(begin, end)]):
+            if not merged or current[0] > merged[-1][1]:
+                merged.append(current)
+            else:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], current[1]))
+        return merged
+
+    def feed(self, tp_header: bytes, payload: bytes, session_id: int) -> bytes:
+        """Feed one TP segment and return the complete payload, else ``b""``."""
+        if len(tp_header) != 4 or not payload:
+            return b""
+        raw = struct.unpack(">I", tp_header)[0]
+        if raw & 0x0E:
+            self.reset(session_id)
+            return b""
+        offset = (raw >> 4) * 16
+        more_segments = (raw & 0x01) != 0
+        if (len(payload) > self.max_segment_size
+                or (more_segments and len(payload) % 16 != 0)):
+            self.reset(session_id)
+            return b""
+        end = offset + len(payload)
+        if end > self.max_payload_size:
+            self.reset(session_id)
+            return b""
+
+        if session_id not in self._assemblies:
+            if len(self._assemblies) >= self.max_sessions:
+                self._assemblies.pop(next(iter(self._assemblies)))
+            self._assemblies[session_id] = {
+                "buffer": bytearray(), "ranges": [], "expected": None,
+            }
+        state = self._assemblies[session_id]
+        expected = state["expected"]
+        if expected is not None and end > expected:
+            self.reset(session_id)
+            return b""
+
+        buf = state["buffer"]
+        if end > len(buf):
+            buf.extend(b"\x00" * (end - len(buf)))
+        buf[offset:end] = payload
+        state["ranges"] = self._add_range(state["ranges"], offset, end)
+
+        if not more_segments:
+            if expected is not None and expected != end:
+                self.reset(session_id)
+                return b""
+            state["expected"] = end
+            expected = end
+            if state["ranges"][-1][1] > expected:
+                self.reset(session_id)
+                return b""
+
+        if (expected is not None and len(state["ranges"]) == 1
+                and state["ranges"][0][0] == 0
+                and state["ranges"][0][1] >= expected):
+            result = bytes(buf[:expected])
+            self.reset(session_id)
+            return result
+        return b""
 
 
 # ── RDI (Radar Detections, Event 0x8002) ──
 
 RDI_HEADER_SIZE = 36
 RDI_DETECTION_SIZE = 51
-RDI_MAX_DETECTIONS = 4096
+RDI_MAX_DETECTIONS = 8192        # protocol limit; FW v3.1.1 sends at most 2048
+RDI_MAX_PAYLOAD_SIZE = RDI_HEADER_SIZE + RDI_MAX_DETECTIONS * RDI_DETECTION_SIZE
 
 
 def parse_rdi_frame(payload: bytes) -> Optional[dict]:
@@ -115,6 +268,11 @@ def parse_rdi_frame(payload: bytes) -> Optional[dict]:
     or None if too short.
     """
     if len(payload) < RDI_HEADER_SIZE:
+        return None
+    num_detections = struct.unpack_from("<H", payload, 34)[0]
+    if num_detections > RDI_MAX_DETECTIONS:
+        return None
+    if len(payload) != RDI_HEADER_SIZE + num_detections * RDI_DETECTION_SIZE:
         return None
     return {
         "version": (payload[0], payload[1], payload[2]),
@@ -129,7 +287,7 @@ def parse_rdi_frame(payload: bytes) -> Optional[dict]:
         "radial_velocity_begin": struct.unpack_from("<f", payload, 24)[0],
         "radial_velocity_end": struct.unpack_from("<f", payload, 28)[0],
         "detections_capability": struct.unpack_from("<H", payload, 32)[0],
-        "num_detections": struct.unpack_from("<H", payload, 34)[0],
+        "num_detections": num_detections,
         "det_start": RDI_HEADER_SIZE,
     }
 
@@ -162,65 +320,108 @@ def parse_rdi_detection(payload: bytes, det_start: int, index: int
 # ── SHII (Sensor Health, Event 0x8003) — variable length ──
 
 SHII_MIN_SIZE = 32
+SHII_MAX_OPERATION_MODES = 11
+SHII_MAX_INPUT_SIGNALS = 4
+SHII_MAX_CALIBRATION_COMPONENTS = 3
+
+
+def _common_header(payload: bytes) -> dict:
+    """ISO 23150 Common Header (24 B, 02_Common_Header): the same keys the
+    RDI header uses. DataQualifier 1 means "do not use the content" and 6 a
+    resend of the previous slot (System Spec §8.3)."""
+    return {
+        "version": (payload[0], payload[1], payload[2]),
+        "interface_id": payload[3],
+        "num_serving_sensors": payload[4],
+        "sensor_id": payload[5],
+        "timestamp": struct.unpack_from("<Q", payload, 6)[0],
+        "message_counter": struct.unpack_from("<I", payload, 14)[0],
+        "interface_cycle_time": struct.unpack_from("<I", payload, 18)[0],
+        "cycle_time_variation": payload[22],
+        "data_qualifier": payload[23],
+    }
 
 
 def parse_shi(payload: bytes) -> Optional[dict]:
     """Parse a variable-length SHII payload (post-E2E)."""
     if len(payload) < SHII_MIN_SIZE:
         return None
-    msg = {
-        "version": (payload[0], payload[1], payload[2]),
-        "interface_id": payload[3],
-        "sensor_id": payload[5],
-        "timestamp": struct.unpack_from("<Q", payload, 6)[0],
-        "message_counter": struct.unpack_from("<I", payload, 14)[0],
-        "data_qualifier": payload[23],
-    }
     off = 24
 
-    n_op = payload[off]; off += 1
-    msg["operation_modes"] = list(payload[off:off + n_op]); off += n_op
+    n_op = payload[off]
+    off += 1
+    if n_op > SHII_MAX_OPERATION_MODES or off + n_op + 4 > len(payload):
+        return None
+    operation_modes = list(payload[off:off + n_op])
+    off += n_op
 
-    msg["defect_recognised"] = payload[off]; off += 1
-    msg["defect_reason"] = payload[off]; off += 1
-    msg["supply_voltage_status"] = payload[off]; off += 1
-    msg["temperature_status"] = payload[off]; off += 1
+    defect_recognised = payload[off]
+    defect_reason = payload[off + 1]
+    supply_voltage_status = payload[off + 2]
+    temperature_status = payload[off + 3]
+    off += 4
 
     if off >= len(payload):
         return None
-    n_in = payload[off]; off += 1
-    msg["input_signal_types"] = list(payload[off:off + n_in]); off += n_in
-    msg["input_signal_statuses"] = list(payload[off:off + n_in]); off += n_in
+    n_in = payload[off]
+    off += 1
+    if n_in > SHII_MAX_INPUT_SIGNALS or off + 2 * n_in + 1 > len(payload):
+        return None
+    input_signal_types = list(payload[off:off + n_in])
+    off += n_in
+    input_signal_statuses = list(payload[off:off + n_in])
+    off += n_in
+
+    time_sync = payload[off]
+    off += 1
 
     if off >= len(payload):
         return None
-    msg["time_sync"] = payload[off]; off += 1
-
-    if off >= len(payload):
+    n_cal = payload[off]
+    off += 1
+    if (n_cal > SHII_MAX_CALIBRATION_COMPONENTS
+            or off + 3 * n_cal != len(payload)):
         return None
-    n_cal = payload[off]; off += 1
-    msg["calibration_components"] = list(payload[off:off + n_cal]); off += n_cal
-    msg["calibration_statuses"] = list(payload[off:off + n_cal]); off += n_cal
-    msg["calibration_states"] = list(payload[off:off + n_cal]); off += n_cal
+    calibration_components = list(payload[off:off + n_cal])
+    off += n_cal
+    calibration_statuses = list(payload[off:off + n_cal])
+    off += n_cal
+    calibration_states = list(payload[off:off + n_cal])
 
-    return msg
+    return {
+        **_common_header(payload),
+        "operation_modes": operation_modes,
+        "defect_recognised": defect_recognised,
+        "defect_reason": defect_reason,
+        "supply_voltage_status": supply_voltage_status,
+        "temperature_status": temperature_status,
+        "input_signal_types": input_signal_types,
+        "input_signal_statuses": input_signal_statuses,
+        "time_sync": time_sync,
+        "calibration_components": calibration_components,
+        "calibration_statuses": calibration_statuses,
+        "calibration_states": calibration_states,
+    }
 
 
 # ── SPI (Sensor Performance, Event 0x8004) ──
 
-SPI_MIN_SIZE = 57  # 24 (CIH) + 1 (vcs) + 32 (pose)
+SPI_MIN_SIZE = 60  # 24 (CIH) + 1 (vcs) + 32 (pose) + 3 count fields
+SPI_FOV_SEGMENT_SIZE = 17
+SPI_OBJECT_TYPE_SIZE = 9
+SPI_REF_TARGET_SIZE = 16
+SPI_MAX_FOV_SEGMENTS = 16
+SPI_MAX_OBJECT_TYPES = 16
+SPI_MAX_REF_TARGETS = 16
 
 
 def parse_spi(payload: bytes) -> Optional[dict]:
-    """Parse an SPI payload (post-E2E). Pose is 32B in v3.0."""
+    """Parse an SPI payload (post-E2E): Common Header, vehicle coordinate
+    system, 32 B pose, FoV segments, object types and reference targets."""
     if len(payload) < SPI_MIN_SIZE:
         return None
     msg = {
-        "version": (payload[0], payload[1], payload[2]),
-        "interface_id": payload[3],
-        "sensor_id": payload[5],
-        "timestamp": struct.unpack_from("<Q", payload, 6)[0],
-        "message_counter": struct.unpack_from("<I", payload, 14)[0],
+        **_common_header(payload),
         "vehicle_coord_system": payload[24],
     }
     pose = struct.unpack_from("<8f", payload, 25)
@@ -231,20 +432,55 @@ def parse_spi(payload: bytes) -> Optional[dict]:
     }
     off = 57
 
-    if off < len(payload):
-        n_fov = payload[off]; off += 1
-        segments = []
-        for _ in range(n_fov):
-            if off + 17 > len(payload):
-                break
-            az0, az1, el0, el1 = struct.unpack_from("<4f", payload, off)
-            segments.append({
-                "azimuth_begin": az0, "azimuth_end": az1,
-                "elevation_begin": el0, "elevation_end": el1,
-                "blockage_status": payload[off + 16],
-            })
-            off += 17
-        msg["fov_segments"] = segments
+    n_fov = payload[off]
+    off += 1
+    if (n_fov > SPI_MAX_FOV_SEGMENTS
+            or off + n_fov * SPI_FOV_SEGMENT_SIZE + 2 > len(payload)):
+        return None
+    segments = []
+    for _ in range(n_fov):
+        az0, az1, el0, el1 = struct.unpack_from("<4f", payload, off)
+        segments.append({
+            "azimuth_begin": az0, "azimuth_end": az1,
+            "elevation_begin": el0, "elevation_end": el1,
+            "blockage_status": payload[off + 16],
+        })
+        off += SPI_FOV_SEGMENT_SIZE
+
+    n_obj = payload[off]
+    off += 1
+    if (n_obj > SPI_MAX_OBJECT_TYPES
+            or off + n_obj * SPI_OBJECT_TYPE_SIZE + 1 > len(payload)):
+        return None
+    object_types = []
+    for _ in range(n_obj):
+        range_begin, range_end = struct.unpack_from("<2f", payload, off + 1)
+        object_types.append({
+            "object_type": payload[off],
+            "detection_range_begin": range_begin,
+            "detection_range_end": range_end,
+        })
+        off += SPI_OBJECT_TYPE_SIZE
+
+    n_ref = payload[off]
+    off += 1
+    if (n_ref > SPI_MAX_REF_TARGETS
+            or off + n_ref * SPI_REF_TARGET_SIZE != len(payload)):
+        return None
+    reference_targets = []
+    for _ in range(n_ref):
+        rcs, range_begin, range_end, snr = struct.unpack_from("<4f", payload, off)
+        reference_targets.append({
+            "radar_cross_section": rcs,
+            "detection_range_begin": range_begin,
+            "detection_range_end": range_end,
+            "signal_to_noise_ratio": snr,
+        })
+        off += SPI_REF_TARGET_SIZE
+
+    msg["fov_segments"] = segments
+    msg["recognisable_object_types"] = object_types
+    msg["reference_target_types"] = reference_targets
 
     return msg
 
@@ -277,7 +513,7 @@ GEAR_REVERSE = 3
 
 
 def build_csii_payload(somc: int = SOMC_NORMAL_MODE,
-                       sensor_id: int = 0,
+                       sensor_id: int = 1,
                        timestamp_ns: int = 0,
                        message_counter: int = 0,
                        global_timestamp_utc: float = 0.0,
@@ -291,7 +527,7 @@ def build_csii_payload(somc: int = SOMC_NORMAL_MODE,
     if timestamp_ns == 0:
         timestamp_ns = time.time_ns()
     cih = struct.pack("<BBBBBBQIIBB",
-                      1, 0, 0,                     # interface version
+                      1, 1, 0,                     # interface version 1.1.0
                       IID_COMMON_SENSOR_INPUT, 1, sensor_id,
                       timestamp_ns, message_counter,
                       100_000_000,                 # cycle time: 100 ms

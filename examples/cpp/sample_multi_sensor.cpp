@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
             st->detections.fetch_add(frame.message.num_detections);
         });
 
-        sdks[i]->RegRecvCallback([st, i](uint32_t total, uint32_t lost) {
+        sdks[i]->RegRecvCallback([st, i](uint32_t /*total*/, uint32_t lost) {
             st->lost.store(lost);
         });
 

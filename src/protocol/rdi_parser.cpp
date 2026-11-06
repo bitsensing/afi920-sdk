@@ -10,9 +10,11 @@ namespace afi {
 
 static constexpr size_t kRdiHeaderSize    = BTS_RDI_HEADER_SIZE;     // 36
 static constexpr size_t kRdiDetectionSize = BTS_RDI_DETECTION_SIZE;  // 51
-static constexpr size_t kRdiMaxDetections = BTS_RDI_MAX_DETECTIONS;  // 4096
+static constexpr size_t kRdiMaxDetections = BTS_RDI_MAX_DETECTIONS;  // 8192
 
 int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
+    frame.message = {};
+    frame.detections_storage.clear();
     if (!payload || len < kRdiHeaderSize) {
         AFI_LOG_ERROR("RDI payload too short: %zu < %zu", len, kRdiHeaderSize);
         return -1;
@@ -44,19 +46,17 @@ int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
 
     // Validate detection count
     if (msg.num_detections > kRdiMaxDetections) {
-        AFI_LOG_WARN("RDI num_detections %d exceeds max %zu, clamping",
+        AFI_LOG_ERROR("RDI num_detections %d exceeds max %zu",
                      msg.num_detections, kRdiMaxDetections);
-        msg.num_detections = static_cast<uint16_t>(kRdiMaxDetections);
+        return -1;
     }
 
-    // Check payload has enough data for all detections
+    // The E2E length and list count must describe exactly one complete payload.
     size_t expected = kRdiHeaderSize + static_cast<size_t>(msg.num_detections) * kRdiDetectionSize;
-    if (len < expected) {
-        AFI_LOG_WARN("RDI payload truncated: %zu < %zu (for %d detections)",
-                     len, expected, msg.num_detections);
-        // Adjust detection count to what we actually have
-        msg.num_detections = static_cast<uint16_t>(
-            (len - kRdiHeaderSize) / kRdiDetectionSize);
+    if (len != expected) {
+        AFI_LOG_ERROR("RDI payload size mismatch: %zu != %zu (for %d detections)",
+                      len, expected, msg.num_detections);
+        return -1;
     }
 
     // ─── Parse Detections ───
@@ -67,7 +67,8 @@ int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
     }
 
     // Point message.detections to our storage
-    msg.detections = frame.detections_storage.data();
+    msg.detections = frame.detections_storage.empty()
+        ? nullptr : frame.detections_storage.data();
 
     return 0;
 }

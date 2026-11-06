@@ -2,11 +2,12 @@
  * @file test_csii_send.cpp
  * @brief Integration test: CSII vehicle input sending (requires a live sensor)
  *
- * Sends N CSII frames at 100 ms over TCP 30501 through the public
- * AfiSdk::SendVehicleInput API. The sensor accepting the connection and
- * all sends succeeding (no RST/close) verifies the outbound path.
+ * Sends N CSII frames at 100 ms to port 30501 through the public
+ * AfiSdk::SendVehicleInput API. The Config API probe picks the transport:
+ * UDP on interface v1.1.0, TCP on v1.0.x. All sends succeeding (no ICMP
+ * unreachable on UDP, no RST/close on TCP) verifies the outbound path.
  *
- * Usage: test_csii_send [sensor_ip] [frame_count]
+ * Usage: test_csii_send [sensor_ip] [frame_count] [udp|tcp]
  */
 #include <afi/afi_sdk.h>
 #include <chrono>
@@ -18,15 +19,22 @@ int main(int argc, char* argv[]) {
     afi::AfiSdkConfig config;
     if (argc > 1) config.sensor_ip = argv[1];
     int frames = (argc > 2) ? std::atoi(argv[2]) : 20;
+    if (argc > 3) config.csii_transport = argv[3];
 
-    config.enable_rdi = false;
-    config.enable_config_api = false;  // CSII only
+    config.enable_rdi = false;  // CSII only; the Config API probe picks the transport
 
     afi::AfiSdk sdk;
     if (sdk.Init(config) != afi::kOk) {
         printf("Init failed\n");
         return 1;
     }
+    const afi::AfiInterfaceGeneration gen = sdk.GetInterfaceGeneration();
+    const char* transport = !config.csii_transport.empty() ? config.csii_transport.c_str()
+                          : gen == afi::AfiInterfaceGeneration::kV1_0 ? "tcp" : "udp";
+    printf("Interface generation %s, CSII over %s\n",
+           gen == afi::AfiInterfaceGeneration::kV1_0   ? "v1.0.x"
+           : gen == afi::AfiInterfaceGeneration::kV1_1 ? "v1.1.0" : "unknown",
+           transport);
 
     afi::AfiVehicleInput input;
     input.somc = BTS_CSII_SOMC_NORMAL_MODE;
@@ -50,7 +58,7 @@ int main(int argc, char* argv[]) {
     }
 
     sdk.Stop();
-    printf("PASS: %d CSII frames sent to %s:%d (115B each, E2E CRC)\n",
-           sent, config.sensor_ip.c_str(), config.csii_port);
+    printf("PASS: %d CSII frames sent to %s:%d over %s (115B each, E2E CRC)\n",
+           sent, config.sensor_ip.c_str(), config.csii_port, transport);
     return 0;
 }

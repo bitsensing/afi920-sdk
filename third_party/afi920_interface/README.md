@@ -1,6 +1,6 @@
-# Vendored AFI920 interface (public subset)
+# Vendored AFI920 interface headers
 
-Public SOME/IP / ISO 23150 interface headers for the AFI920, vendored from the
-bitsensing AFI920 interface definitions (commit 150f16a). Internal-only parts
-(raw-data, EOL/factory) are intentionally excluded. Header-only/source set used
-by the SDK build (see src/CMakeLists.txt include path).
+Public SOME/IP and ISO 23150 C headers of the AFI920 interface v1.1.0,
+copied from the bitsensing AFI920 interface definitions (commit 21e4ef5).
+Only the headers the SDK build includes are vendored; `src/CMakeLists.txt`
+adds `third_party/afi920_interface/src/c` to the include path.

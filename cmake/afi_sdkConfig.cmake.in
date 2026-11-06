@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+# The static library links Threads::Threads privately on non-Windows hosts;
+# the exported link interface still names it.
+if(NOT WIN32)
+    find_dependency(Threads)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/afi_sdkTargets.cmake")
+check_required_components(afi_sdk)
