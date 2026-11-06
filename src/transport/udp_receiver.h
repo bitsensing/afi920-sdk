@@ -1,6 +1,6 @@
 /**
  * @file udp_receiver.h
- * @brief UDP socket receiver for data streams
+ * @brief UDP socket receiver for data streams and UDP sender for CSII
  *
  * Copyright (c) 2026 bitsensing Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -9,6 +9,7 @@
 
 #include "transport/platform.h"
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 namespace afi {
@@ -44,6 +45,19 @@ public:
                 char* src_addr = nullptr, size_t src_addr_size = 0);
 
     /**
+     * @brief Accept datagrams only from this IPv4 source (empty = any)
+     *
+     * Radars are told apart by source IP. Without a filter, a second radar
+     * sending to the same port would mix into this stream and its SOME/IP-TP
+     * segments into this reassembler. Filtered datagrams read as a timeout
+     * and are counted by ForeignDrops().
+     * @return false when `ip` is not a dotted IPv4 address (filter left off)
+     */
+    bool SetExpectedSource(const std::string& ip);
+
+    uint64_t ForeignDrops() const { return foreign_drops_; }
+
+    /**
      * @brief Close the socket
      */
     void Close();
@@ -52,6 +66,44 @@ public:
 
 private:
     socket_t socket_ = kInvalidSocket;
+    bool filter_source_ = false;
+    in_addr expected_source_{};
+    uint64_t foreign_drops_ = 0;
+};
+
+/**
+ * @brief Connected UDP sender for outbound notifications (CSII, UDP 30501)
+ *
+ * One Send() is one datagram. There is no session; Connect() only fixes the
+ * destination address on the socket.
+ */
+class UdpSender {
+public:
+    UdpSender() = default;
+    ~UdpSender();
+
+    UdpSender(const UdpSender&) = delete;
+    UdpSender& operator=(const UdpSender&) = delete;
+
+    /**
+     * @brief Create the socket and fix the destination
+     * @return 0 on success, negative on error
+     */
+    int Connect(const std::string& ip, uint16_t port);
+
+    void Disconnect();
+
+    bool IsConnected() const { return socket_ != kInvalidSocket; }
+
+    /**
+     * @brief Send one datagram (thread-safe)
+     * @return 0 on success, negative on error
+     */
+    int Send(const uint8_t* data, size_t len);
+
+private:
+    socket_t socket_ = kInvalidSocket;
+    std::mutex mutex_;
 };
 
 } // namespace afi

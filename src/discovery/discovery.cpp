@@ -6,6 +6,7 @@
 #include "util/endian_util.h"
 #include "util/logger.h"
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <cstring>
 #include <set>
 
@@ -28,9 +29,6 @@ std::vector<AfiSensorInfo> Discovery::Scan(int timeout_ms, uint16_t port,
     int broadcast = 1;
     setsockopt(sock, SOL_SOCKET, SO_BROADCAST,
                reinterpret_cast<const char*>(&broadcast), sizeof(broadcast));
-
-    // Set receive timeout
-    platform_set_recv_timeout(sock, timeout_ms);
 
     // Allow port reuse
     int reuse = 1;
@@ -86,17 +84,32 @@ std::vector<AfiSensorInfo> Discovery::Scan(int timeout_ms, uint16_t port,
 
     AFI_LOG_INFO("Discovery: broadcast sent to port %d", port);
 
-    // Collect responses
-    std::set<std::string> seen; // dedup by ip+serial
-    uint8_t buf[2048];
+    // Collect responses for one window (Discovery §Publisher Usage). Each
+    // radar answers twice (unicast + limited broadcast); the pair is deduped
+    // by (source IP, serial number).
+    std::set<std::string> seen;
+    uint8_t buf[4096];
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
 
     while (true) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0) break;
+        platform_set_recv_timeout(sock, static_cast<int>(remaining));
+
         struct sockaddr_in sender{};
         socklen_t sender_len = sizeof(sender);
 
         int n = ::recvfrom(sock, reinterpret_cast<char*>(buf), sizeof(buf), 0,
                            reinterpret_cast<struct sockaddr*>(&sender), &sender_len);
-        if (n <= 0) break; // timeout or error
+        if (n < 0) {
+            if (platform_last_error_is_timeout()) break;
+            // Windows reports an ICMP port-unreachable for the request on a
+            // later receive (WSAECONNRESET); other answers may still arrive.
+            continue;
+        }
+        if (n == 0) continue;
 
         // Need at least SOME/IP header
         if (static_cast<size_t>(n) < kSomeipHeaderSize) continue;
@@ -115,7 +128,11 @@ std::vector<AfiSensorInfo> Discovery::Scan(int timeout_ms, uint16_t port,
 
         AfiSensorInfo info;
         if (ParseResponse(buf + payload_offset, payload_len, info) == 0) {
-            std::string key = info.ip + ":" + info.serial_number;
+            char src[INET_ADDRSTRLEN] = {0};
+            ::inet_ntop(AF_INET, &sender.sin_addr, src, sizeof(src));
+            info.source_ip = src;
+            if (info.ip.empty()) info.ip = info.source_ip;
+            std::string key = info.source_ip + "|" + info.serial_number;
             if (seen.find(key) == seen.end()) {
                 seen.insert(key);
                 AFI_LOG_INFO("Discovery: found %s (%s) at %s",
@@ -151,7 +168,6 @@ int Discovery::ParseResponse(const uint8_t* data, size_t len, AfiSensorInfo& out
         if (d.contains("hw_version"))       out.hw_version = d["hw_version"].get<std::string>();
         if (d.contains("software_version")) out.software_version = d["software_version"].get<std::string>();
         if (d.contains("bootloader_hash"))  out.bootloader_hash = d["bootloader_hash"].get<std::string>();
-        if (d.contains("driver_hash"))      out.driver_hash = d["driver_hash"].get<std::string>();
         if (d.contains("fw_hash"))          out.fw_hash = d["fw_hash"].get<std::string>();
 
         // Network
@@ -205,6 +221,19 @@ int Discovery::ParseResponse(const uint8_t* data, size_t len, AfiSensorInfo& out
         // PTP status
         if (d.contains("ptp_state"))      out.ptp_state = d["ptp_state"].get<std::string>();
         if (d.contains("ptp_offset_ns"))  out.ptp_offset_ns = d["ptp_offset_ns"].get<int64_t>();
+
+        // driver_hash exists only on interface v1.0.x, the m72_* keys only on v1.1.0.
+        out.generation = AfiInterfaceGeneration::kUnknown;
+        if (d.contains("driver_hash")) {
+            out.generation = AfiInterfaceGeneration::kV1_0;
+        } else {
+            for (const auto& item : d.items()) {
+                if (item.key().rfind("m72_", 0) == 0) {
+                    out.generation = AfiInterfaceGeneration::kV1_1;
+                    break;
+                }
+            }
+        }
 
         return 0;
     } catch (const std::exception& e) {

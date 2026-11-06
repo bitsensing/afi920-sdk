@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
             // Print first detection if available
             if (frame.message.num_detections > 0 && frame.message.detections) {
                 const auto& d = frame.message.detections[0];
-                printf("  [0] r=%.2f m  az=%.3f rad  el=%.3f rad  v=%.2f m/s  rcs=%.1f dBm2\n",
+                printf("  [0] r=%.2f m  az=%.3f rad  el=%.3f rad  v=%.2f m/s  rcs=%.1f dBsm\n",
                        d.position_radial_distance,
                        d.position_azimuth,
                        d.position_elevation,
@@ -60,9 +60,9 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // Register packet loss callback
+    // Register RDI packet loss callback
     sdk.RegRecvCallback([](uint32_t total, uint32_t lost) {
-        printf("*** Packet loss detected: %u lost / %u total (%.2f%%)\n",
+        printf("*** RDI packet loss detected: %u lost / %u total (%.2f%%)\n",
                lost, total, 100.0 * lost / total);
     });
 

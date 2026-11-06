@@ -24,7 +24,7 @@ extern "C" {
 
 #define BTS_RDI_HEADER_SIZE             (36u)
 #define BTS_RDI_DETECTION_SIZE          (51u)
-#define BTS_RDI_MAX_DETECTIONS          (4096u)
+#define BTS_RDI_MAX_DETECTIONS          (8192u)
 #define BTS_RDI_MAX_PAYLOAD_SIZE        (BTS_RDI_HEADER_SIZE + BTS_RDI_DETECTION_SIZE * BTS_RDI_MAX_DETECTIONS)
 
 /*============================================================================

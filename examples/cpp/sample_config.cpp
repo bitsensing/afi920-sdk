@@ -1,6 +1,6 @@
 /**
  * @file sample_config.cpp
- * @brief Sample: Read and write sensor configuration via Config API
+ * @brief Sample: Read sensor configuration via Config API
  *
  * Usage: sample_config [sensor_ip]
  */
@@ -47,8 +47,8 @@ int main(int argc, char* argv[]) {
         printf("  Model:      %s\n", dev.model_name.c_str());
         printf("  HW Version: %s\n", dev.hw_version.c_str());
         printf("  SW Version: %s\n", dev.software_version.c_str());
-        printf("  Hashes:     bl=%s drv=%s fw=%s\n",
-               dev.bootloader_hash.c_str(), dev.driver_hash.c_str(), dev.fw_hash.c_str());
+        printf("  Hashes:     bl=%s fw=%s\n",
+               dev.bootloader_hash.c_str(), dev.fw_hash.c_str());
         printf("  MAC:        %s\n", dev.mac_address.c_str());
     }
 
@@ -115,17 +115,18 @@ int main(int argc, char* argv[]) {
     rc = sdk.GetDetectionThreshold(thresh);
     print_result("GetDetectionThreshold", rc);
     if (rc == afi::kOk) {
-        printf("  SNR:  %.1f dB\n", thresh.snr_dB);
+        printf("  SNR level:  %.0f\n", thresh.snr_dB);
         print_cfar_table("CFAR first", thresh.cfar_table_first_frame);
-        print_cfar_table("CFAR second", thresh.cfar_table_second_frame);
+        if (thresh.has_cfar_table_second_frame) {
+            print_cfar_table("CFAR second", thresh.cfar_table_second_frame);
+        }
     }
 
     afi::AfiDetectionFilters filters;
     rc = sdk.GetDetectionFilters(filters);
     print_result("GetDetectionFilters", rc);
     if (rc == afi::kOk) {
-        printf("  FOV:               %s\n", filters.filter_fov ? "ON" : "OFF");
-        printf("  APS noise:         %s\n", filters.filter_aps_noise ? "ON" : "OFF");
+        printf("  Ground reflection: %s\n", filters.filter_ground_reflection ? "ON" : "OFF");
         printf("  Ego specular:      %s\n", filters.filter_ego_specular ? "ON" : "OFF");
         printf("  Ground sidelobe:   %s\n", filters.filter_ground_sidelobe ? "ON" : "OFF");
         printf("  Upper structure:   %s\n", filters.filter_upper_structure ? "ON" : "OFF");
@@ -133,14 +134,6 @@ int main(int argc, char* argv[]) {
         printf("  Struct multipath:  %s\n", filters.filter_structure_multipath ? "ON" : "OFF");
         printf("  Specular mirror:   %s\n", filters.filter_specular_mirror ? "ON" : "OFF");
         printf("  Wheel microdopp.:  %s\n", filters.filter_wheel_microdoppler ? "ON" : "OFF");
-    }
-
-    afi::AfiDetectionDensity density;
-    rc = sdk.GetDetectionDensity(density);
-    print_result("GetDetectionDensity", rc);
-    if (rc == afi::kOk) {
-        printf("  Range density: %s\n", density.range_density ? "ON" : "OFF");
-        printf("  Angle density: %s\n", density.angle_density ? "ON" : "OFF");
     }
 
     // --- Time Sync ---
@@ -151,6 +144,9 @@ int main(int argc, char* argv[]) {
     print_result("GetPtpConfig", rc);
     if (rc == afi::kOk) {
         printf("  Profile: %d (%s)\n", ptp.profile, ptp.profile_name.c_str());
+        printf("  Configured: %d (%s), restart required: %s\n",
+               ptp.configured_profile, ptp.configured_profile_name.c_str(),
+               ptp.restart_required ? "yes" : "no");
         printf("  State:   %s, offset=%lld ns, master=%s\n",
                ptp.state.c_str(), static_cast<long long>(ptp.offset_ns),
                ptp.master_clock_id.c_str());

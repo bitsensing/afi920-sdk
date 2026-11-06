@@ -46,9 +46,9 @@ TEST(reset_clears_state) {
 }
 
 TEST(large_rdi_frame_reassembly) {
-    // Max v3.0 RDI frame: E2E 20B + 36B + 4096*51B = 208,952B in 1392B chunks
-    SomeipTpReassembler tp;
-    const size_t total = 20 + 36 + 4096 * 51;
+    // Max RDI frame: E2E 20B + 36B + 8192*51B = 417,848B in 1392B chunks
+    const size_t total = 20 + 36 + 8192 * 51;
+    SomeipTpReassembler tp(total);
     const size_t chunk = 1392;
 
     std::vector<uint8_t> payload(total);
@@ -65,6 +65,60 @@ TEST(large_rdi_frame_reassembly) {
     CHECK(std::memcmp(tp.GetPayload(), payload.data(), total) == 0);
     tp.Reset();
     PASS("large_rdi_frame_reassembly");
+}
+
+TEST(out_of_order_requires_full_coverage) {
+    SomeipTpReassembler tp(64);
+    const uint8_t first[16] = {0x11};
+    const uint8_t last[16] = {0x22};
+
+    CHECK(!tp.Feed(last, sizeof(last), 16, false, 7));
+    CHECK(tp.InProgress());
+    CHECK(tp.Feed(first, sizeof(first), 0, true, 7));
+    CHECK(tp.GetPayloadSize() == 32);
+    CHECK(tp.GetPayload()[0] == 0x11);
+    CHECK(tp.GetPayload()[16] == 0x22);
+    PASS("out_of_order_requires_full_coverage");
+}
+
+TEST(gap_is_not_complete) {
+    SomeipTpReassembler tp(64);
+    const uint8_t data[16] = {};
+    CHECK(!tp.Feed(data, sizeof(data), 0, true, 1));
+    CHECK(!tp.Feed(data, sizeof(data), 32, false, 1));
+    CHECK(tp.InProgress());
+    PASS("gap_is_not_complete");
+}
+
+TEST(oversize_segment_rejected) {
+    SomeipTpReassembler tp(32);
+    const uint8_t data[16] = {};
+    CHECK(!tp.Feed(data, sizeof(data), 32, false, 1));
+    CHECK(!tp.InProgress());
+    PASS("oversize_segment_rejected");
+}
+
+TEST(invalid_segment_shape_rejected) {
+    SomeipTpReassembler tp(4096);
+    std::vector<uint8_t> too_large(1393);
+    CHECK(!tp.Feed(too_large.data(), too_large.size(), 0, false, 1));
+    CHECK(!tp.InProgress());
+
+    const uint8_t unaligned[17] = {};
+    CHECK(!tp.Feed(unaligned, sizeof(unaligned), 0, true, 1));
+    CHECK(!tp.InProgress());
+    PASS("invalid_segment_shape_rejected");
+}
+
+TEST(session_change_discards_old_message) {
+    SomeipTpReassembler tp(64);
+    const uint8_t first[16] = {0x11};
+    const uint8_t last[16] = {0x22};
+    CHECK(!tp.Feed(first, sizeof(first), 0, true, 1));
+    CHECK(!tp.Feed(last, sizeof(last), 16, false, 2));
+    CHECK(tp.Feed(first, sizeof(first), 0, true, 2));
+    CHECK(tp.GetPayloadSize() == 32);
+    PASS("session_change_discards_old_message");
 }
 
 TEST_MAIN("SOME/IP-TP Reassembly Tests")

@@ -2,7 +2,9 @@
 Sample: Connect to multiple AFI920 sensors and configure data ports
 
 Demonstrates multi-sensor setup by assigning different UDP data ports
-per sensor to avoid port conflicts, then verifying the configuration.
+per sensor to avoid port conflicts. Network settings need the diagnostic
+access mode, are stored in NVM, and apply after a restart; this sample
+restarts each sensor and reads the settings back.
 
 Usage:
     python sample_multi_sensor.py <sensor1_ip> <sensor2_ip> [...]
@@ -12,7 +14,7 @@ Copyright 2026 bitsensing Inc. All rights reserved.
 
 import argparse
 import sys
-from afi_sdk import AfiSdk, AfiSdkConfig, RangeMode
+from afi_sdk import AfiSdk, AfiSdkConfig, AccessMode, RangeMode
 
 
 # Port offsets per sensor (sensor 0 uses defaults, sensor 1 uses +100, etc.)
@@ -75,14 +77,23 @@ def main():
         print(f"    SHII -> {host_ip}:{shii_port}")
         print(f"    SPI  -> {host_ip}:{spi_port}")
 
-        # Stream destinations via unified SetNetworkConfig (partial update,
-        # applies immediately — no restart)
+        # Stream destinations via SetNetworkConfig (partial update). SETs need
+        # the diagnostic access mode; the values apply after a restart.
+        if sdk.enter_mode(AccessMode.DIAGNOSTIC) != 0:
+            print(f"    Diagnostic mode refused: {sdk.last_result}")
+            sdk.close()
+            continue
         resp = sdk.set_network_config(
             detection_ip=host_ip, detection_port=rdi_port,
             health_ip=host_ip, health_port=shii_port,
             performance_ip=host_ip, performance_port=spi_port,
         )
         print(f"    Result: {'OK' if resp is not None else 'FAILED'}")
+        sdk.restart()
+        if sdk.reconnect(timeout_s=90) != 0:
+            print("    Sensor did not come back after the restart")
+            sdk.close()
+            continue
 
         # Verify
         verified = sdk.get_network_config()

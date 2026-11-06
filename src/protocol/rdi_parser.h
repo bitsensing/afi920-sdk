@@ -3,7 +3,7 @@
  * @brief RDI (Radar Detection Interface) payload parser
  *
  * Deserializes ISO 23150 RDI binary payload into bts_rdi_message_t.
- * Header: 61 bytes + Detections: 94 bytes each (little-endian).
+ * Header: 36 bytes + Detections: 51 bytes each (little-endian).
  *
  * Copyright (c) 2026 bitsensing Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause

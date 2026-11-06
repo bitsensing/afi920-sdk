@@ -3,7 +3,7 @@
  * @brief CSII (Common Sensor Input) frame builder — Host → Radar
  *
  * Builds the complete 115-byte wire frame:
- *   SOME/IP header (16B, BE) + E2E Profile 7 header (20B, BE, CRC-64/XZ)
+ *   SOME/IP header (16B, BE) + E2E header (20B, BE, CRC-32 over the body)
  *   + ISO 23150 CSII payload (79B, LE)
  *
  * Copyright (c) 2026 bitsensing Inc. All rights reserved.
@@ -17,7 +17,7 @@
 
 namespace afi {
 
-/// Total CSII frame size on the wire (TCP single segment)
+/// Total CSII frame size on the wire (one UDP datagram)
 static constexpr size_t kCsiiFrameSize = 16 + 20 + BTS_CSII_SIZE;  // 115
 
 /**

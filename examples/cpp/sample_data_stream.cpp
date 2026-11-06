@@ -2,7 +2,7 @@
  * @file sample_data_stream.cpp
  * @brief Sample: Receive RDI/SHII/SPI data streams from AFI920 sensor
  *
- * Demonstrates simultaneous reception of all three data stream types:
+ * Demonstrates simultaneous reception of all four data stream types:
  *   - RDI (Radar Detection Interface) — point cloud detections
  *   - SHII (Sensor Health Information) — sensor health status
  *   - SPI (Sensor Performance Interface) — FOV, object types, reference targets
@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
     printf("  Sensor:   %s\n", sensor_ip);
     printf("  Duration: %ds\n\n", duration);
 
-    // Configure — enable all three streams, no Config API needed
+    // Configure — enable RDI/SHII/SPI, no Config API needed
     afi::AfiSdkConfig config;
     config.sensor_ip = sensor_ip;
     config.enable_rdi = true;
@@ -148,9 +148,9 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // ── Packet loss callback ──
+    // ── RDI packet loss callback ──
     sdk.RegRecvCallback([](uint32_t total, uint32_t lost) {
-        printf("*** Packet loss: %u lost / %u total (%.2f%%)\n",
+        printf("*** RDI packet loss: %u lost / %u total (%.2f%%)\n",
                lost, total, 100.0 * lost / total);
     });
 
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    printf("Listening on UDP ports:\n");
+    printf("Data stream ports (%s):\n", config.stream_transport.c_str());
     printf("  RDI:  %d\n", config.rdi_port);
     printf("  SHII: %d\n", config.shi_port);
     printf("  SPI:  %d\n", config.spi_port);
@@ -213,7 +213,7 @@ int main(int argc, char* argv[]) {
             printf("  Timestamp:  %llu ns\n", static_cast<unsigned long long>(g_rdi_first_timestamp));
             if (g_rdi_first_num_det > 0) {
                 printf("  Detection #0: range=%.2fm az=%.3frad el=%.3frad "
-                       "vel=%.2fm/s rcs=%.1fdBm2\n",
+                       "vel=%.2fm/s rcs=%.1fdBsm\n",
                        g_rdi_first_det_range, g_rdi_first_det_az, g_rdi_first_det_el,
                        g_rdi_first_det_vel, g_rdi_first_det_rcs);
             }

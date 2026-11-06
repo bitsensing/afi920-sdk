@@ -1,22 +1,24 @@
 """
 Sample: Read and write sensor configuration via Config API
 
-Connects to a sensor, reads all config categories, and demonstrates
-non-destructive write-back tests.
+Connects to a sensor and reads all config categories. With --write it
+enters the diagnostic access mode and writes two values back unchanged
+(an NVM write; the sensor stays in diagnostic mode until it reboots).
 
 Usage:
-    python sample_config.py [sensor_ip] [config_port]
+    python sample_config.py [sensor_ip] [config_port] [--write]
 
 Copyright 2026 bitsensing Inc. All rights reserved.
 """
 
 import sys
-from afi_sdk import AfiSdk, AfiSdkConfig, RangeMode
+from afi_sdk import AfiSdk, AfiSdkConfig, AccessMode, RangeMode
 
 
 def main():
-    host = sys.argv[1] if len(sys.argv) > 1 else "192.168.10.150"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 30500
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    host = args[0] if len(args) > 0 else "192.168.10.150"
+    port = int(args[1]) if len(args) > 1 else 30500
 
     config = AfiSdkConfig(sensor_ip=host, config_port=port)
     sdk = AfiSdk()
@@ -37,7 +39,7 @@ def main():
         print(f"  HW Version: {info.get('hw_version', '?')}")
         print(f"  SW Version: {info.get('software_version', '?')}")
         print(f"  Hashes:     bl={info.get('bootloader_hash', '?')} "
-              f"drv={info.get('driver_hash', '?')} fw={info.get('fw_hash', '?')}")
+              f"fw={info.get('fw_hash', '?')}")
         print(f"  MAC:        {info.get('mac_address', '?')}")
 
     status = sdk.get_sensor_status()
@@ -85,9 +87,10 @@ def main():
 
     thresh = sdk.get_detection_threshold()
     if thresh:
-        print(f"  SNR:  {thresh.get('snr_threshold_db', '?')} dB")
+        print(f"  SNR level:  {thresh.get('snr_threshold_db', '?')}")
         print(f"  CFAR first:  {thresh.get('cfar_table_first_frame', '?')}")
-        print(f"  CFAR second: {thresh.get('cfar_table_second_frame', '?')}")
+        if "cfar_table_second_frame" in thresh:
+            print(f"  CFAR second: {thresh['cfar_table_second_frame']}")
 
     filters = sdk.get_detection_filters()
     if filters:
@@ -95,17 +98,15 @@ def main():
             if key.startswith("filter_"):
                 print(f"  {key[7:]:22s} {'ON' if value else 'OFF'}")
 
-    density = sdk.get_detection_density()
-    if density:
-        print(f"  range_density: {'ON' if density.get('range_density') else 'OFF'}")
-        print(f"  angle_density: {'ON' if density.get('angle_density') else 'OFF'}")
-
     # ── Time Sync ──
     print("\n=== Time Sync (PTP) ===")
 
     ptp = sdk.get_ptp_config()
     if ptp:
         print(f"  Profile: {ptp.get('profile', '?')} ({ptp.get('profile_name', '?')})")
+        print(f"  Configured: {ptp.get('configured_profile', '?')} "
+              f"({ptp.get('configured_profile_name', '?')}), "
+              f"restart required={ptp.get('restart_required', '?')}")
         print(f"  State:   {ptp.get('state', '?')}, offset={ptp.get('offset_ns', '?')} ns, "
               f"master={ptp.get('master_clock_id', '?')}")
 
@@ -132,15 +133,24 @@ def main():
         print(f"  Load status: {cfg_status.get('load_status_name', '?')} "
               f"({cfg_status.get('load_status', '?')})")
 
-    # ── Write-back Test (non-destructive) ──
+    # ── Write-back Test (same values; NVM write) ──
+    # SETs need the diagnostic access mode, which lasts until the sensor
+    # reboots. Run with --write to include this part.
+    if "--write" not in sys.argv:
+        sdk.close()
+        print("\nDone (read-only; --write adds write-backs).")
+        return
     print("\n--- Write-back Test ---")
+    rc = sdk.enter_mode(AccessMode.DIAGNOSTIC)
+    print(f"  EnterMode(diagnostic): {'OK' if rc == 0 else f'FAIL ({rc})'}")
 
     if mode is not None:
         rc = sdk.set_range_mode(mode)
         print(f"  SetRangeMode (same value): {'OK' if rc == 0 else f'FAIL ({rc})'}")
 
-    if filters and "filter_fov" in filters:
-        rc = sdk.set_detection_filters(filter_fov=filters["filter_fov"])
+    if filters and "filter_multibounce_2x" in filters:
+        rc = sdk.set_detection_filters(
+            filter_multibounce_2x=filters["filter_multibounce_2x"])
         print(f"  SetDetectionFilters (same value): {'OK' if rc == 0 else f'FAIL ({rc})'}")
 
     sdk.close()

@@ -16,7 +16,7 @@ namespace afi {
 class ShiParser {
 public:
     /**
-     * @brief Parse SHII payload (62 bytes, little-endian)
+     * @brief Parse a complete variable-length SHII payload (little-endian)
      * @param payload Raw SHII payload bytes
      * @param len Payload length
      * @param[out] msg Output message

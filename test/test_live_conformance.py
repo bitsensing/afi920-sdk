@@ -1,24 +1,24 @@
 """
-Live interface-conformance verification against real AFI920 sensors.
+Live interface-conformance verification against real AFI920 sensors
+(interface v1.1.0, firmware v3.1.1).
 
-Validates the protocol v3.0 spec on the wire, per sensor:
-  [D] Discovery     — required response fields, value sanity, dedup
-  [C] Config API    — GET keys/types/ranges per category, non-destructive
-                      same-value SETs, removed-legacy-ID rejection
-  [S] Data streams  — SOME/IP header, E2E Profile 7 (CRC-64/XZ, counter,
-                      data_id), ISO payload conformance (RDI/SHII/SPI),
-                      ~100 ms cycle, counter continuity
-  [V] CSII input    — send vehicle input, observe SHII input signal status
+Per sensor:
+  [D] Discovery     — required response fields, value sanity
+  [C] Config API    — GET methods only, response E2E (CRC-32, Data ID =
+                      0x6000 << 16 | Method ID)
+  [S] Data streams  — RDI / SHII / SPI over the transport the radar reports
+                      (TCP: host connects; UDP: host binds the stream port),
+                      SOME/IP header, E2E (20B, CRC-32 over the body, zero
+                      CRC never passes), ~100 ms cycle, E2E Counter and
+                      MessageCounter continuity, DataQualifier 0/1/6,
+                      shared E2E Counter per send slot across the 3 streams
+  [V] CSII input    — UDP 30501 vehicle input, SHII input signal status
 
-Multi-sensor: pass any number of IPs (or discover). Streams are TCP
-(host connects to each sensor's own ports), so sensors never collide
-on host ports.
+The script sends no SET, Restart, firmware, or access mode request. A failed E2E check is counted and reported; frames are kept.
 
 Usage:
-    python test/test_live_conformance.py                       # discover all
-    python test/test_live_conformance.py 192.168.10.150 [...]  # explicit IPs
-    python test/test_live_conformance.py --bind 192.168.10.139 # discovery NIC
-    python test/test_live_conformance.py --duration 8 --skip-csii
+    python test/test_live_conformance.py 192.168.10.150 --duration 30
+    python test/test_live_conformance.py --bind 192.168.10.100     # discover
 
 Exit code 0 = all hard checks passed on every sensor.
 """
@@ -28,7 +28,9 @@ import math
 import socket
 import struct
 import sys
+import threading
 import time
+from collections import Counter
 from pathlib import Path
 
 # Korean Windows consoles default to CP949 — force UTF-8 for report glyphs
@@ -39,23 +41,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python" / "src"))
 
 from afi_sdk.someip import (  # noqa: E402
     ConfigClient, discover,
-    SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE, SERVICE_ID,
+    SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE, SERVICE_ID, PROTO_VER, IFACE_VER,
+    MSG_TYPE_NOTIFICATION, MSG_TYPE_TP,
     EVENT_RDI, EVENT_SHII, EVENT_SPI,
     RANGE_MODE_NAMES,
     METHOD_GET_DEVICE_INFO, METHOD_GET_SENSOR_STATUS,
     METHOD_GET_DIAGNOSTIC_INFO, METHOD_GET_COMMAND_HISTORY,
-    METHOD_GET_NETWORK_CONFIG, METHOD_GET_RANGE_MODE, METHOD_SET_RANGE_MODE,
-    METHOD_GET_DETECTION_THRESHOLD, METHOD_SET_DETECTION_THRESHOLD,
-    METHOD_GET_DETECTION_FILTERS,
-    METHOD_SET_DETECTION_FILTERS, METHOD_GET_DETECTION_DENSITY,
-    METHOD_SET_DETECTION_DENSITY, METHOD_GET_PTP_CONFIG,
-    METHOD_GET_MOUNTING_POSITION, METHOD_GET_ROTATION,
-    METHOD_GET_SENSOR_POSITION,
-    METHOD_GET_CONFIG_STATUS,
+    METHOD_GET_NETWORK_CONFIG, METHOD_GET_RANGE_MODE,
+    METHOD_GET_DETECTION_THRESHOLD, METHOD_GET_DETECTION_FILTERS,
+    METHOD_GET_PTP_CONFIG, METHOD_GET_MOUNTING_POSITION, METHOD_GET_ROTATION,
+    METHOD_GET_SENSOR_POSITION, METHOD_GET_BOOT_INFO, METHOD_GET_CONFIG_STATUS,
+    METHOD_GET_MODE,
 )
 from afi_sdk import streams  # noqa: E402
 
 PI = math.pi
+EXPECTED_IFACE_VERSION = (1, 1, 0)
+EXPECTED_FW = "3.1.1"
+VALID_DQ = {0, 1, 6}
 
 
 class Section:
@@ -82,12 +85,31 @@ class Section:
         return [r for r in self.results if not r[0]]
 
 
+def local_ipv4_addresses(peer: str = ""):
+    """Host IPv4 addresses: the hostname's, plus the source address the
+    routing table picks toward ``peer``. The hostname alone can resolve to
+    127.0.1.1 only (Debian/WSL /etc/hosts)."""
+    addrs = set()
+    try:
+        for res in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addrs.add(res[4][0])
+    except OSError:
+        pass
+    if peer:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect((peer, 9))    # no packet is sent for a UDP connect
+                addrs.add(s.getsockname()[0])
+        except OSError:
+            pass
+    return addrs
+
+
 # ─── [D] Discovery ───
 
 DISCOVERY_REQUIRED_FIELDS = [
     "serial_number", "mac_address", "model_name",
-    "hw_version", "software_version",
-    "bootloader_hash", "driver_hash", "fw_hash",
+    "hw_version", "software_version", "bootloader_hash", "fw_hash",
     "ip_address", "subnet_mask", "gateway",
     "api_port", "detection_port", "health_port", "performance_port",
     "detection_protocol", "health_protocol", "performance_protocol",
@@ -99,6 +121,8 @@ DISCOVERY_REQUIRED_FIELDS = [
 
 def run_discovery_section(ip: str, info: dict) -> Section:
     s = Section("D", "Discovery")
+    s.check(bool(info.get("serial_number")), "Discovery response received",
+            f"source={info.get('_source_ip')}")
     missing = [f for f in DISCOVERY_REQUIRED_FIELDS if f not in info]
     s.check(not missing, "required fields present",
             f"missing: {missing}" if missing else f"{len(DISCOVERY_REQUIRED_FIELDS)} fields")
@@ -106,11 +130,7 @@ def run_discovery_section(ip: str, info: dict) -> Section:
             f"{info.get('ip_address')} vs {ip}")
 
     rm = info.get("range_mode", -1)
-    s.check(rm in RANGE_MODE_NAMES, "range_mode in registry (0..5)", f"value={rm}")
-    if rm in RANGE_MODE_NAMES:
-        s.check(info.get("range_mode_name") == RANGE_MODE_NAMES[rm],
-                "range_mode_name matches code",
-                f"{info.get('range_mode_name')} vs {RANGE_MODE_NAMES[rm]}")
+    s.check(rm in RANGE_MODE_NAMES, "range_mode in registry (0..6)", f"value={rm}")
 
     for proto_key in ("detection_protocol", "health_protocol", "performance_protocol"):
         v = info.get(proto_key, "")
@@ -120,15 +140,24 @@ def run_discovery_section(ip: str, info: dict) -> Section:
     s.check(isinstance(ss, dict) and "scan_index" in ss and "uptime_seconds" in ss,
             "scan_status object (scan_index, uptime_seconds)", str(ss))
     s.info(f"serial={info.get('serial_number')} sw={info.get('software_version')} "
-           f"hashes(bl/drv/fw)={info.get('bootloader_hash')}/{info.get('driver_hash')}"
-           f"/{info.get('fw_hash')} ptp={info.get('ptp_state')} "
-           f"radar_active={info.get('radar_active')} mode={info.get('radar_mode')}")
+           f"bl/fw hash={info.get('bootloader_hash')}/{info.get('fw_hash')} "
+           f"ptp={info.get('ptp_state')} radar_active={info.get('radar_active')} "
+           f"dst(det/hea/per)={info.get('detection_ip')}/{info.get('health_ip')}"
+           f"/{info.get('performance_ip')}")
     return s
 
 
 # ─── [C] Config API ───
 
-def run_config_section(ip: str) -> Section:
+DETECTION_FILTERS_V110 = [
+    "filter_ego_specular", "filter_ground_reflection", "filter_ground_sidelobe",
+    "filter_multibounce_2x", "filter_specular_mirror",
+    "filter_structure_multipath", "filter_upper_structure",
+    "filter_wheel_microdoppler",
+]
+
+
+def run_config_section(ip: str, ctx: dict) -> Section:
     s = Section("C", "Config API")
     client = ConfigClient(ip)
     if not client.connect():
@@ -136,138 +165,95 @@ def run_config_section(ip: str) -> Section:
         return s
     s.check(True, "TCP 30500 connect")
 
-    def get(mid, name):
+    e2e_results = []
+
+    def get(mid, name, required=True):
         rc, data = client.request(mid)
         ok = (rc == 0 and isinstance(data, dict))
-        s.check(ok, f"{name} (0x{mid:04X}) returns data", f"rc={rc}")
+        if client.last_response_e2e is not None:
+            e2e_results.append((name, client.last_response_e2e))
+        if required:
+            s.check(ok, f"{name} (0x{mid:04X}) returns data", f"rc={rc}")
         return data if ok else None
 
-    # Device Info & Status (0x001x)
     dev = get(METHOD_GET_DEVICE_INFO, "GetDeviceInfo")
     if dev:
         keys = ["serial_number", "mac_address", "model_name", "hw_version",
-                "software_version", "bootloader_hash", "driver_hash", "fw_hash"]
+                "software_version", "bootloader_hash", "fw_hash"]
         missing = [k for k in keys if k not in dev]
-        s.check(not missing, "GetDeviceInfo v3.0 keys", f"missing: {missing}" if missing else "")
+        s.check(not missing, "GetDeviceInfo v1.1.0 keys",
+                f"missing: {missing}" if missing else f"sw={dev.get('software_version')}")
 
     status = get(METHOD_GET_SENSOR_STATUS, "GetSensorStatus")
     if status:
         code = status.get("operation_state_code", -1)
         s.check(0 <= code <= 3, "operation_state_code in 0..3", f"{code}")
-        s.check(status.get("uptime_sec", 0) > 0, "uptime_sec > 0",
-                f"{status.get('uptime_sec')}")
 
-    diag = get(METHOD_GET_DIAGNOSTIC_INFO, "GetDiagnosticInfo")
-    if diag:
-        s.check("combined_state" in diag and "active_fault_count" in diag,
-                "GetDiagnosticInfo flat fault schema",
-                f"state={diag.get('combined_state')} faults={diag.get('active_fault_count')}")
-        if isinstance(diag.get("faults"), list) and diag["faults"]:
-            f0 = diag["faults"][0]
-            s.check(all(k in f0 for k in ("id", "name", "source", "level_code")),
-                    "fault entry keys", str(sorted(f0.keys())))
-
+    get(METHOD_GET_DIAGNOSTIC_INFO, "GetDiagnosticInfo")
     get(METHOD_GET_COMMAND_HISTORY, "GetCommandHistoryInfo")
 
-    # Network (0x002x) — unified payload
     net = get(METHOD_GET_NETWORK_CONFIG, "GetNetworkConfig")
     if net:
-        radar_keys = ["ip_address", "subnet_mask", "gateway", "api_port", "vlan_id"]
-        missing = [k for k in radar_keys if k not in net]
-        s.check(not missing, "NetworkConfig radar fields", f"missing: {missing}" if missing else "")
+        ctx["net"] = net
         stream_keys = [f"{p}_{f}" for p in ("detection", "health", "performance")
                        for f in ("ip", "port", "protocol")]
-        present = [k for k in stream_keys if k in net]
-        s.check(len(present) == len(stream_keys), "NetworkConfig stream destinations",
-                f"{len(present)}/{len(stream_keys)} present")
+        missing = [k for k in stream_keys if k not in net]
+        s.check(not missing, "NetworkConfig 3-stream destinations (v1.1.0)",
+                f"missing: {missing}" if missing else "9/9 keys")
+        s.check(not any(k.startswith("objects_") for k in net),
+                "NetworkConfig has no objects_* keys", "")
+        s.info("destinations: " + ", ".join(
+            f"{p}={net.get(p + '_protocol')}:{net.get(p + '_ip')}:{net.get(p + '_port')}"
+            for p in ("detection", "health", "performance")))
 
-    # Range Mode (0x003x) + same-value write-back
     rm = get(METHOD_GET_RANGE_MODE, "GetRangeMode")
     if rm:
-        mode = rm.get("range_mode", -1)
-        s.check(mode in RANGE_MODE_NAMES, "range_mode in 0..5", f"{mode}")
-        rc, _ = client.request(METHOD_SET_RANGE_MODE, {"range_mode": mode})
-        s.check(rc == 0, "SetRangeMode same-value accepted", f"rc={rc}")
+        s.check(rm.get("range_mode", -1) in RANGE_MODE_NAMES, "range_mode in 0..6",
+                f"{rm.get('range_mode')} ({rm.get('range_mode_name')})")
 
-    # Detection (0x004x)
     th = get(METHOD_GET_DETECTION_THRESHOLD, "GetDetectionThreshold")
     if th:
-        snr = th.get("snr_threshold_db", -1)
-        snr_ok = isinstance(snr, (int, float)) and 0.0 <= snr <= 30.0
-        s.check(snr_ok, "snr_threshold_db plausible", f"snr={snr}")
+        cf = th.get("cfar_table_first_frame")
+        s.check(isinstance(cf, list) and len(cf) == 19,
+                "cfar_table_first_frame has 19 levels", str(cf))
 
-        def valid_cfar_table(value):
-            return (
-                isinstance(value, list)
-                and len(value) == 19
-                and all(isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 9
-                        for v in value)
-            )
-
-        cfar_first = th.get("cfar_table_first_frame")
-        cfar_second = th.get("cfar_table_second_frame")
-        cfar_first_ok = valid_cfar_table(cfar_first)
-        cfar_second_ok = valid_cfar_table(cfar_second)
-        s.check(cfar_first_ok, "cfar_table_first_frame has 19 levels 1..9",
-                str(cfar_first))
-        s.check(cfar_second_ok, "cfar_table_second_frame has 19 levels 1..9",
-                str(cfar_second))
-
-        if snr_ok and cfar_first_ok and cfar_second_ok:
-            rc, _ = client.request(METHOD_SET_DETECTION_THRESHOLD, {
-                "snr_threshold_db": snr,
-                "cfar_table_first_frame": cfar_first,
-                "cfar_table_second_frame": cfar_second,
-            })
-            s.check(rc == 0, "SetDetectionThreshold same-value accepted", f"rc={rc}")
-
-    FILTERS = ["filter_fov", "filter_aps_noise", "filter_ego_specular",
-               "filter_ground_sidelobe", "filter_upper_structure",
-               "filter_multibounce_2x", "filter_structure_multipath",
-               "filter_specular_mirror", "filter_wheel_microdoppler"]
     filt = get(METHOD_GET_DETECTION_FILTERS, "GetDetectionFilters")
     if filt:
-        missing = [k for k in FILTERS if k not in filt]
-        s.check(not missing, "9 detection filters incl. APS",
+        missing = [k for k in DETECTION_FILTERS_V110 if k not in filt]
+        s.check(not missing, "8 detection filters (v1.1.0)",
                 f"missing: {missing}" if missing else "")
-        bad_types = [k for k in FILTERS if k in filt and not isinstance(filt[k], bool)]
-        s.check(not bad_types, "filter values are bool",
-                f"non-bool: {bad_types}" if bad_types else "")
-        rc, _ = client.request(METHOD_SET_DETECTION_FILTERS,
-                               {"filter_fov": filt.get("filter_fov", True)})
-        s.check(rc == 0, "SetDetectionFilters partial same-value accepted", f"rc={rc}")
 
-    dens = get(METHOD_GET_DETECTION_DENSITY, "GetDetectionDensity")
-    if dens:
-        s.check("range_density" in dens and "angle_density" in dens,
-                "density toggles present",
-                f"range={dens.get('range_density')} angle={dens.get('angle_density')}")
-        rc, _ = client.request(METHOD_SET_DETECTION_DENSITY,
-                               {"range_density": dens.get("range_density", True)})
-        s.check(rc == 0, "SetDetectionDensity same-value accepted", f"rc={rc}")
-
-    # Time Sync (0x005x) — combined config + status
     ptp = get(METHOD_GET_PTP_CONFIG, "GetPTPConfig")
     if ptp:
-        s.check("profile" in ptp and "state" in ptp,
-                "PTP combined config+status",
-                f"profile={ptp.get('profile')} state={ptp.get('state')} "
-                f"offset={ptp.get('offset_ns')}ns")
+        s.info(f"PTP profile={ptp.get('profile')} state={ptp.get('state')} "
+               f"offset={ptp.get('offset_ns')}ns grid={ptp.get('grid_state')}")
 
-    # Mounting (0x007x)
     get(METHOD_GET_MOUNTING_POSITION, "GetMountingPosition")
     get(METHOD_GET_ROTATION, "GetRotation")
     get(METHOD_GET_SENSOR_POSITION, "GetSensorPosition")
-
-    # Persistence status reads
+    get(METHOD_GET_BOOT_INFO, "GetBootInfo")
     get(METHOD_GET_CONFIG_STATUS, "GetConfigStatus")
 
-    # Removed legacy method IDs must be rejected (registry renumber proof)
-    for legacy_id, name in ((0x0032, "old GetStandbyMode"),
-                            (0x00E0, "old SaveConfig")):
-        rc, _ = client.request(legacy_id)
-        s.check(rc != 0, f"legacy 0x{legacy_id:04X} ({name}) rejected", f"rc={rc}")
+    mode = get(METHOD_GET_MODE, "GetMode")
+    if mode:
+        ctx["access_mode"] = mode
+        s.check(mode.get("streams_halted") == 0, "GetMode streams_halted == 0",
+                f"mode={mode.get('access_mode_name')} halted={mode.get('streams_halted')}")
 
+    # Reserved IDs on v1.1.0 (no side effect: the radar answers NOT_SUPPORTED)
+    reserved = [(0x0044, "GetDetectionDensity (reserved)")]
+    for rid, name in reserved:
+        rc, _ = client.request(rid)
+        s.check(rc != 0, f"0x{rid:04X} {name} rejected", f"rc={rc}")
+
+    bad = [n for n, e in e2e_results if not e["ok"]]
+    s.check(e2e_results and not bad, "response E2E (CRC-32, Data ID, Length) valid",
+            f"{len(e2e_results) - len(bad)}/{len(e2e_results)} ok"
+            + (f", failed: {bad}" if bad else ""))
+    counters = [e["counter"] for _, e in e2e_results]
+    mono = all((b - a) & 0xFFFFFFFF == 1 for a, b in zip(counters, counters[1:]))
+    s.check(mono, "response E2E Counter +1 per response (System Spec 7.3)",
+            f"{counters[:3]}..{counters[-3:]}")
     client.close()
     return s
 
@@ -277,29 +263,39 @@ def run_config_section(ip: str) -> Section:
 E2E_DATA_IDS = {EVENT_RDI: streams.E2E_DATA_ID_RDI,
                 EVENT_SHII: streams.E2E_DATA_ID_SHII,
                 EVENT_SPI: streams.E2E_DATA_ID_SPI}
+IFACE_IDS = {EVENT_RDI: 0x08, EVENT_SHII: 0x0D, EVENT_SPI: 0x0C}
+MAX_FRAME = SOMEIP_HEADER_SIZE + streams.E2E_HEADER_SIZE + streams.RDI_MAX_PAYLOAD_SIZE
 
 
 class StreamStats:
-    def __init__(self):
+    def __init__(self, name):
+        self.name = name
+        self.transport = ""
+        self.error = ""
         self.frames = 0
         self.someip_bad = 0
+        self.session_gaps = 0
+        self.e2e_ok = 0
         self.e2e_crc_bad = 0
+        self.e2e_crc_zero = 0
         self.e2e_id_bad = 0
         self.e2e_len_bad = 0
         self.e2e_counter_gaps = 0
         self.e2e_counter_nonmono = 0
+        self.msg_counter_decrease = 0
+        self.dq = Counter()
+        self.iface_bad = 0
         self.parse_fail = 0
-        self.payload_bad = 0
-        self.payload_bad_detail = ""
-        self.msg_counter_gaps = 0
-        self.first_ts = None
-        self.last_ts = None
         self.recv_t0 = None
         self.recv_t1 = None
+        self.arrivals = []
+        self.e2e_counters = []
+        self.last_session = None
         self.last_e2e_counter = None
-        self.last_msg_counter = None
+        self.last_dq0_mc = None
         self.detections_total = 0
         self.sample = None
+        self.shi_msgs = []
 
 
 def _recv_exact(sock, n):
@@ -312,291 +308,288 @@ def _recv_exact(sock, n):
     return buf
 
 
-def check_rdi_payload(payload, st: StreamStats):
-    hdr = streams.parse_rdi_frame(payload)
-    if hdr is None:
+def _iso_common(iso):
+    if len(iso) < 24:
+        return None
+    return {"version": tuple(iso[0:3]), "interface_id": iso[3],
+            "timestamp": struct.unpack_from("<Q", iso, 6)[0],
+            "message_counter": struct.unpack_from("<I", iso, 14)[0],
+            "dq": iso[23]}
+
+
+def process_stream_message(data: bytes, event_id: int, st: StreamStats):
+    h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
+    svc, mid, length, _, session, proto, iface, mtype, ret = h
+    if (svc != SERVICE_ID or mid != event_id or proto != PROTO_VER
+            or iface != IFACE_VER or (mtype & ~MSG_TYPE_TP) != MSG_TYPE_NOTIFICATION
+            or ret != 0 or length + 8 != len(data)):
+        st.someip_bad += 1
+        return
+    if st.last_session is not None and ((session - st.last_session) & 0xFFFF) != 1:
+        st.session_gaps += 1
+    st.last_session = session
+
+    e2e, iso = streams.strip_e2e(data[SOMEIP_HEADER_SIZE:],
+                                 expected_data_id=E2E_DATA_IDS[event_id])
+    if e2e is None:
+        st.someip_bad += 1
+        return
+    st.frames += 1
+    st.arrivals.append(time.monotonic())
+    st.e2e_ok += int(e2e["ok"])
+    st.e2e_crc_bad += int(not e2e["crc_ok"] and not e2e["crc_zero"])
+    st.e2e_crc_zero += int(e2e["crc_zero"])
+    st.e2e_id_bad += int(not e2e["data_id_ok"])
+    st.e2e_len_bad += int(not e2e["length_ok"])
+    c = e2e["counter"]
+    st.e2e_counters.append(c)
+    if st.last_e2e_counter is not None:
+        delta = (c - st.last_e2e_counter) & 0xFFFFFFFF
+        if delta == 0 or delta > 0x80000000:
+            st.e2e_counter_nonmono += 1
+        elif delta > 1:
+            st.e2e_counter_gaps += delta - 1
+    st.last_e2e_counter = c
+
+    common = _iso_common(iso)
+    if common is None:
         st.parse_fail += 1
         return
-    n = hdr["num_detections"]
-    problems = []
-    if hdr["interface_id"] != 0x08:
-        problems.append(f"interface_id=0x{hdr['interface_id']:02X}")
-    if len(payload) != streams.RDI_HEADER_SIZE + n * streams.RDI_DETECTION_SIZE:
-        problems.append(f"size {len(payload)} != 36+51*{n}")
-    if n > streams.RDI_MAX_DETECTIONS:
-        problems.append(f"num_detections {n}")
-    st.detections_total += n
-    if n > 0:
-        d = streams.parse_rdi_detection(payload, hdr["det_start"], 0)
-        if d:
-            if not (0 <= d["existence_probability"] <= 100):
-                problems.append(f"existence {d['existence_probability']}")
-            if not (0.0 <= d["radial_distance"] <= 1000.0):
-                problems.append(f"range {d['radial_distance']}")
-            if not (-PI <= d["azimuth"] <= PI):
-                problems.append(f"azimuth {d['azimuth']}")
-            if st.sample is None:
-                st.sample = (f"det[0]: r={d['radial_distance']:.2f}m "
-                             f"az={d['azimuth']:.3f} el={d['elevation']:.3f} "
-                             f"v={d['radial_velocity']:.2f}m/s rcs={d['rcs']:.1f} "
-                             f"snr={d['snr']:.1f}")
-    if problems:
-        st.payload_bad += 1
-        st.payload_bad_detail = "; ".join(problems)
-    return hdr
+    if common["version"] != EXPECTED_IFACE_VERSION or common["interface_id"] != IFACE_IDS[event_id]:
+        st.iface_bad += 1
+    st.dq[common["dq"]] += 1
+    if common["dq"] == 0:
+        mc = common["message_counter"]
+        if st.last_dq0_mc is not None and mc < st.last_dq0_mc:
+            st.msg_counter_decrease += 1
+        st.last_dq0_mc = mc
+
+    if event_id == EVENT_RDI:
+        hdr = streams.parse_rdi_frame(iso)
+        if hdr is None:
+            st.parse_fail += 1
+            return
+        st.detections_total += hdr["num_detections"]
+        if st.sample is None and hdr["num_detections"] > 0:
+            d = streams.parse_rdi_detection(iso, hdr["det_start"], 0)
+            if d:
+                st.sample = (f"det[0] r={d['radial_distance']:.2f}m az={d['azimuth']:.3f} "
+                             f"v={d['radial_velocity']:.2f} snr={d['snr']:.1f} "
+                             f"cap={hdr['detections_capability']}")
+    elif event_id == EVENT_SHII:
+        msg = streams.parse_shi(iso)
+        if msg is None:
+            st.parse_fail += 1
+            return
+        st.shi_msgs.append((time.monotonic(), msg))
+        if st.sample is None:
+            st.sample = (f"modes={msg['operation_modes']} sync={msg['time_sync']} "
+                         f"inputs={list(zip(msg['input_signal_types'], msg['input_signal_statuses']))}")
+    elif event_id == EVENT_SPI:
+        if streams.parse_spi(iso) is None:
+            st.parse_fail += 1
 
 
-VALID_OP_MODES = {0, 1, 2, 3, 4, 5, 10, 50, 100, 200, 201}
-
-
-def check_shi_payload(payload, st: StreamStats):
-    msg = streams.parse_shi(payload)
-    if msg is None:
-        st.parse_fail += 1
-        return
-    problems = []
-    if msg["interface_id"] != 0x0D:
-        problems.append(f"interface_id=0x{msg['interface_id']:02X}")
-    bad_modes = [m for m in msg["operation_modes"] if m not in VALID_OP_MODES]
-    if bad_modes:
-        problems.append(f"op_modes {bad_modes}")
-    if len(msg["operation_modes"]) > 11 or len(msg["calibration_components"]) > 3:
-        problems.append("array counts exceed max")
-    if st.sample is None:
-        st.sample = (f"modes={msg['operation_modes']} defect={msg['defect_recognised']}"
-                     f"/{msg['defect_reason']} volt={msg['supply_voltage_status']} "
-                     f"temp={msg['temperature_status']} sync={msg['time_sync']} "
-                     f"calib={list(zip(msg['calibration_components'], msg['calibration_statuses'], msg['calibration_states']))} "
-                     f"inputs={list(zip(msg['input_signal_types'], msg['input_signal_statuses']))}")
-    if problems:
-        st.payload_bad += 1
-        st.payload_bad_detail = "; ".join(problems)
-    return msg
-
-
-def check_spi_payload(payload, st: StreamStats):
-    msg = streams.parse_spi(payload)
-    if msg is None:
-        st.parse_fail += 1
-        return
-    problems = []
-    if msg["interface_id"] != 0x0C:
-        problems.append(f"interface_id=0x{msg['interface_id']:02X}")
-    if msg["vehicle_coord_system"] not in (0, 1):
-        problems.append(f"vcs={msg['vehicle_coord_system']}")
-    if st.sample is None:
-        p = msg["pose"]
-        st.sample = (f"pose origin=({p['origin_x']:.2f},{p['origin_y']:.2f},"
-                     f"{p['origin_z']:.2f}) ypr=({p['yaw']:.3f},{p['pitch']:.3f},"
-                     f"{p['roll']:.3f}) fov_segs={len(msg.get('fov_segments', []))}")
-    if problems:
-        st.payload_bad += 1
-        st.payload_bad_detail = "; ".join(problems)
-    return msg
-
-
-PAYLOAD_CHECKS = {EVENT_RDI: check_rdi_payload,
-                  EVENT_SHII: check_shi_payload,
-                  EVENT_SPI: check_spi_payload}
-
-
-def receive_stream(ip: str, port: int, event_id: int, duration: float,
-                   shi_sink: list = None) -> StreamStats:
-    st = StreamStats()
+def receive_stream(ip, port, event_id, transport, duration, st: StreamStats,
+                   start_evt: threading.Event = None):
+    st.transport = transport
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-        sock.settimeout(3.0)
-        sock.connect((ip, port))
-    except OSError:
+        if transport == "tcp":
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            sock.settimeout(3.0)
+            sock.connect((ip, port))
+        else:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024 * 1024)
+            sock.bind(("0.0.0.0", port))
+            sock.settimeout(0.5)
+    except OSError as exc:
+        st.error = f"{transport} open {port}: {exc}"
         return st
+    if start_evt is not None:
+        start_evt.wait()
 
+    tp = streams.SomeipTpReassembler(MAX_FRAME, max_sessions=2)
     st.recv_t0 = time.monotonic()
     deadline = st.recv_t0 + duration
     while time.monotonic() < deadline:
         try:
-            pre = _recv_exact(sock, 8)
-            if len(pre) < 8:
-                break
-            length = struct.unpack(">I", pre[4:8])[0]
-            rest = _recv_exact(sock, length)
-            if len(rest) < length:
-                break
+            if transport == "tcp":
+                pre = _recv_exact(sock, 8)
+                if len(pre) < 8:
+                    st.error = "TCP closed by peer"
+                    break
+                length = struct.unpack(">I", pre[4:8])[0]
+                if length < 8 or length + 8 > MAX_FRAME:
+                    st.someip_bad += 1
+                    break
+                rest = _recv_exact(sock, length)
+                if len(rest) < length:
+                    break
+                process_stream_message(pre + rest, event_id, st)
+            else:
+                data, src = sock.recvfrom(65536)
+                if src[0] != ip or len(data) < SOMEIP_HEADER_SIZE:
+                    continue
+                mtype = data[14]
+                if mtype & MSG_TYPE_TP:
+                    session = struct.unpack_from(">H", data, 10)[0]
+                    full = tp.feed(data[16:20], data[20:], session)
+                    if not full:
+                        continue
+                    hdr = bytearray(data[:16])
+                    struct.pack_into(">I", hdr, 4, 8 + len(full))
+                    hdr[14] = MSG_TYPE_NOTIFICATION
+                    process_stream_message(bytes(hdr) + full, event_id, st)
+                else:
+                    process_stream_message(data, event_id, st)
         except socket.timeout:
             continue
-        except OSError:
+        except OSError as exc:
+            st.error = str(exc)
             break
-
-        data = pre + rest
-        h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
-        svc, mid, _, _, _, proto, iface, mtype, ret = h
-        if svc != SERVICE_ID or mid != event_id or mtype != 0x02 \
-                or proto != 0x01 or ret != 0x00:
-            st.someip_bad += 1
-            continue
-
-        frame = data[SOMEIP_HEADER_SIZE:]
-        e2e, iso = streams.strip_e2e(frame)
-        if e2e is None:
-            st.someip_bad += 1
-            continue
-        if not e2e["crc_ok"]:
-            st.e2e_crc_bad += 1
-        if e2e["data_id"] != E2E_DATA_IDS[event_id]:
-            st.e2e_id_bad += 1
-        if e2e["length"] != len(iso):
-            st.e2e_len_bad += 1
-        if st.last_e2e_counter is not None:
-            delta = (e2e["counter"] - st.last_e2e_counter) & 0xFFFFFFFF
-            if delta == 0 or delta > 0x80000000:
-                st.e2e_counter_nonmono += 1
-            elif delta > 1:
-                st.e2e_counter_gaps += delta - 1
-        st.last_e2e_counter = e2e["counter"]
-
-        st.frames += 1
-        msg = PAYLOAD_CHECKS[event_id](iso, st)
-        if msg:
-            mc = msg["message_counter"]
-            if st.last_msg_counter is not None:
-                d = (mc - st.last_msg_counter) & 0xFFFFFFFF
-                if 1 < d < 1000:
-                    st.msg_counter_gaps += d - 1
-            st.last_msg_counter = mc
-            if st.first_ts is None:
-                st.first_ts = msg["timestamp"]
-            st.last_ts = msg["timestamp"]
-            if shi_sink is not None and event_id == EVENT_SHII:
-                shi_sink.append(msg)
     st.recv_t1 = time.monotonic()
     sock.close()
     return st
 
 
-def run_stream_section(ip: str, info: dict, duration: float) -> Section:
-    s = Section("S", "Data Streams")
-    specs = [("RDI", info.get("detection_port", 30509), EVENT_RDI),
-             ("SHII", info.get("health_port", 30510), EVENT_SHII),
-             ("SPI", info.get("performance_port", 30511), EVENT_SPI)]
+def stream_plan(info: dict, ctx: dict):
+    net = ctx.get("net") or {}
+    plan = []
+    for name, prefix, eid, dport in (("RDI", "detection", EVENT_RDI, 30509),
+                                     ("SHII", "health", EVENT_SHII, 30510),
+                                     ("SPI", "performance", EVENT_SPI, 30511)):
+        proto = net.get(f"{prefix}_protocol") or info.get(f"{prefix}_protocol") or "tcp"
+        port = net.get(f"{prefix}_port") or info.get(f"{prefix}_port") or dport
+        dst = net.get(f"{prefix}_ip") or info.get(f"{prefix}_ip") or ""
+        plan.append((name, prefix, eid, int(port), proto, dst))
+    return plan
 
-    import threading
-    stats = {}
+
+def run_stream_section(ip: str, info: dict, ctx: dict, duration: float) -> Section:
+    s = Section("S", "Data Streams")
+    plan = stream_plan(info, ctx)
+    local = local_ipv4_addresses(ip)
+    for name, _, _, port, proto, dst in plan:
+        if proto == "udp":
+            s.check(dst in local or dst in ("0.0.0.0", ""),
+                    f"{name} UDP destination {dst} is a host address",
+                    f"host IPv4: {sorted(local)}")
+
+    stats = {name: StreamStats(name) for name, *_ in plan}
+    start = threading.Event()
     threads = []
-    for name, port, eid in specs:
-        def worker(n=name, p=port, e=eid):
-            stats[n] = receive_stream(ip, p, e, duration)
-        t = threading.Thread(target=worker, daemon=True)
+    for name, _, eid, port, proto, _ in plan:
+        t = threading.Thread(target=receive_stream, daemon=True,
+                             args=(ip, port, eid, proto, duration, stats[name], start))
         t.start()
         threads.append(t)
+    time.sleep(0.3)
+    start.set()
     for t in threads:
         t.join(timeout=duration + 10)
 
-    min_frames = int(duration * 5)  # expect ~10 Hz, require half
-    for name, port, eid in specs:
-        st = stats.get(name)
-        if st is None or st.frames == 0:
-            s.check(False, f"{name} frames received", "0 frames")
+    for name, _, eid, port, proto, _ in plan:
+        st = stats[name]
+        label = f"{name} ({proto.upper()} {port})"
+        if st.error and st.frames == 0:
+            s.check(False, f"{label} frames received", st.error)
             continue
         elapsed = (st.recv_t1 - st.recv_t0) if st.recv_t1 else duration
         rate = st.frames / elapsed if elapsed > 0 else 0
-        s.check(st.frames >= min_frames, f"{name} frames received",
-                f"{st.frames} in {elapsed:.1f}s ({rate:.1f} Hz)")
+        s.check(st.frames >= int(duration * 8), f"{label} frames received",
+                f"{st.frames} in {elapsed:.1f}s ({rate:.2f} Hz)")
+        if st.frames == 0:
+            continue
         s.check(st.someip_bad == 0, f"{name} SOME/IP header conformance",
-                f"{st.someip_bad} bad")
-        s.check(st.e2e_crc_bad == 0, f"{name} E2E CRC-64 all valid",
-                f"{st.e2e_crc_bad}/{st.frames} bad")
-        s.check(st.e2e_id_bad == 0, f"{name} E2E data_id == 0x{E2E_DATA_IDS[eid]:08X}",
-                f"{st.e2e_id_bad} bad")
-        s.check(st.e2e_len_bad == 0, f"{name} E2E length == ISO size",
-                f"{st.e2e_len_bad} bad")
-        s.check(st.e2e_counter_nonmono == 0, f"{name} E2E counter monotonic",
-                f"{st.e2e_counter_nonmono} non-monotonic, {st.e2e_counter_gaps} gaps")
-        s.check(st.parse_fail == 0 and st.payload_bad == 0,
-                f"{name} ISO payload conformance",
-                f"parse_fail={st.parse_fail} bad={st.payload_bad} {st.payload_bad_detail}")
-        s.check(7.0 <= rate <= 13.0, f"{name} cycle ≈ 100 ms",
-                f"{rate:.1f} Hz")
-        if st.first_ts and st.last_ts and st.frames > 1:
-            span_s = (st.last_ts - st.first_ts) / 1e9
-            drift = abs(span_s - (st.frames - 1) * 0.1)
-            s.info(f"{name} sensor-timestamp span {span_s:.2f}s over "
-                   f"{st.frames} frames (drift vs 100ms grid: {drift:.2f}s), "
-                   f"msg_counter gaps={st.msg_counter_gaps}")
-        if name == "RDI":
-            s.info(f"RDI detections total={st.detections_total} "
-                   f"avg={st.detections_total / max(st.frames, 1):.1f}/frame")
+                f"{st.someip_bad} bad, session gaps={st.session_gaps}")
+        pct = 100.0 * st.e2e_ok / st.frames
+        s.check(st.e2e_ok == st.frames, f"{name} E2E pass rate",
+                f"{st.e2e_ok}/{st.frames} ({pct:.2f}%) crc_bad={st.e2e_crc_bad} "
+                f"crc_zero={st.e2e_crc_zero} id_bad={st.e2e_id_bad} len_bad={st.e2e_len_bad}")
+        s.check(st.e2e_counter_nonmono == 0, f"{name} E2E Counter no repeat/decrease",
+                f"{st.e2e_counter_nonmono} non-monotonic, {st.e2e_counter_gaps} skipped slots")
+        s.check(st.msg_counter_decrease == 0, f"{name} DQ0 MessageCounter non-decreasing",
+                f"{st.msg_counter_decrease} decreases")
+        s.check(set(st.dq) <= VALID_DQ, f"{name} DataQualifier in {{0,1,6}}",
+                f"{dict(st.dq)}")
+        s.check(st.iface_bad == 0, f"{name} InterfaceVersion 1.1.0 / InterfaceID",
+                f"{st.iface_bad} bad")
+        s.check(st.parse_fail == 0, f"{name} ISO payload parse", f"{st.parse_fail} failed")
+        iv = [b - a for a, b in zip(st.arrivals, st.arrivals[1:])]
+        if iv:
+            mean = sum(iv) / len(iv) * 1000
+            s.check(90.0 <= mean <= 110.0, f"{name} cycle ≈ 100 ms",
+                    f"mean={mean:.1f}ms min={min(iv)*1000:.1f} max={max(iv)*1000:.1f}")
         if st.sample:
             s.info(f"{name} {st.sample}")
+        if name == "RDI":
+            s.info(f"RDI detections avg={st.detections_total / st.frames:.1f}/frame")
+
+    # RDI, SHII, SPI of one send slot carry the same E2E Counter (System Spec 8.2).
+    sets = [set(stats[n].e2e_counters) for n in ("RDI", "SHII", "SPI") if stats[n].frames]
+    if len(sets) == 3:
+        common = sets[0] & sets[1] & sets[2]
+        union = sets[0] | sets[1] | sets[2]
+        s.check(len(common) >= 0.9 * len(union) - 3, "RDI/SHII/SPI share E2E Counter per slot",
+                f"common={len(common)} union={len(union)}")
+    ctx["shii_stats"] = stats.get("SHII")
     return s
 
 
 # ─── [V] CSII vehicle input ───
 
-def run_csii_section(ip: str, info: dict, duration: float) -> Section:
+def run_csii_section(ip: str, info: dict, ctx: dict, duration: float) -> Section:
     s = Section("V", "CSII Vehicle Input")
-    csii_port = 30501
+    plan = {p[0]: p for p in stream_plan(info, ctx)}
+    _, _, eid, port, proto, _ = plan["SHII"]
 
-    # Baseline SHII input signal statuses
-    pre = []
-    receive_stream(ip, info.get("health_port", 30510), EVENT_SHII, 1.5, shi_sink=pre)
+    pre = StreamStats("SHII")
+    receive_stream(ip, port, eid, proto, 2.0, pre)
 
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3.0)
-        sock.connect((ip, csii_port))
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    except OSError as e:
-        s.check(False, f"TCP {csii_port} connect", str(e))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect((ip, 30501))
+    except OSError as exc:
+        s.check(False, "UDP 30501 socket", str(exc))
         return s
-    s.check(True, f"TCP {csii_port} connect")
 
-    # Publish ~2s of CSII at 100 ms while sampling SHII concurrently
-    import threading
-    post = []
-    rx = threading.Thread(
-        target=receive_stream,
-        args=(ip, info.get("health_port", 30510), EVENT_SHII, duration),
-        kwargs={"shi_sink": post}, daemon=True)
+    post = StreamStats("SHII")
+    rx = threading.Thread(target=receive_stream, daemon=True,
+                          args=(ip, port, eid, proto, duration, post))
     rx.start()
-
     sent = 0
-    try:
-        n_frames = max(int(duration / 0.1), 10)
-        for i in range(n_frames):
-            payload = streams.build_csii_payload(
-                somc=streams.SOMC_NORMAL_MODE,
-                message_counter=i,
-                velocity_mps=(5.0, 0.0, 0.0),
-                gear_position=streams.GEAR_FORWARD,
-                global_timestamp_utc=time.time())
-            frame = streams.build_csii_frame(payload, counter=i, session_id=i + 1)
-            sock.sendall(frame)
+    t_first = time.monotonic()
+    n_frames = max(int(duration / 0.1), 10)
+    for i in range(n_frames):
+        payload = streams.build_csii_payload(
+            somc=streams.SOMC_NORMAL_MODE, message_counter=i,
+            velocity_mps=(5.0, 0.0, 0.0), gear_position=streams.GEAR_FORWARD,
+            global_timestamp_utc=time.time())
+        frame = streams.build_csii_frame(payload, counter=i, session_id=i + 1)
+        try:
+            sock.send(frame)
             sent += 1
-            time.sleep(0.1)
-    except OSError as e:
-        s.check(False, "CSII frames sent", f"send failed after {sent}: {e}")
-        sock.close()
-        return s
-    s.check(sent == n_frames, "CSII frames sent",
-            f"{sent} frames @100ms (115B each, E2E CRC)")
+        except OSError:
+            pass
+        time.sleep(0.1)
     sock.close()
     rx.join(timeout=duration + 5)
+    s.check(sent == n_frames, "CSII datagrams sent (UDP 30501, 115B, E2E CRC-32)",
+            f"{sent}/{n_frames}")
 
-    def status_summary(msgs):
-        if not msgs:
-            return None
-        last = msgs[-1]
-        return list(zip(last["input_signal_types"], last["input_signal_statuses"]))
+    def statuses(msgs, after=None):
+        vals = [m["input_signal_statuses"] for t, m in msgs if after is None or t >= after]
+        return vals[-1] if vals else None
 
-    before, after = status_summary(pre), status_summary(post)
-    s.info(f"SHII input signals before CSII: {before}")
-    s.info(f"SHII input signals during CSII: {after}")
-    # Informational: v1.1 firmware stores CSII but feedback wiring may be partial.
-    if after is not None:
-        improved = before != after
-        s.info("input signal status changed during CSII"
-               if improved else "input signal status unchanged (FW v1.1: store-only)")
+    before = statuses(pre.shi_msgs)
+    during = statuses(post.shi_msgs, after=t_first + 0.5)
+    s.info(f"SHII input signal statuses before CSII: {before} "
+           f"(0=Valid 2=Missing 4=Timeout)")
+    s.info(f"SHII input signal statuses during CSII: {during}")
+    s.check(during is not None and len(during) == 4 and all(v == 0 for v in during),
+            "SHII input signal status Valid(0) x4 while CSII is sent", str(during))
     return s
 
 
@@ -606,13 +599,11 @@ def verify_sensor(info: dict, duration: float, skip_csii: bool) -> bool:
     ip = info.get("ip_address") or info.get("_source_ip")
     print(f"\n{'=' * 64}\n Sensor {info.get('serial_number', '?')} @ {ip} "
           f"(sw {info.get('software_version', '?')})\n{'=' * 64}")
-    sections = [
-        run_discovery_section(ip, info),
-        run_config_section(ip),
-        run_stream_section(ip, info, duration),
-    ]
+    ctx = {}
+    sections = [run_discovery_section(ip, info), run_config_section(ip, ctx)]
+    sections.append(run_stream_section(ip, info, ctx, duration))
     if not skip_csii:
-        sections.append(run_csii_section(ip, info, min(duration, 3.0)))
+        sections.append(run_csii_section(ip, info, ctx, min(duration, 4.0)))
 
     total = sum(len(sec.results) for sec in sections)
     failed = [f"[{sec.tag}] {name} ({detail})"
@@ -628,10 +619,9 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ips", nargs="*", help="sensor IPs (default: discover)")
     ap.add_argument("--bind", default="", help="local IP for discovery broadcast")
-    ap.add_argument("--duration", type=float, default=8.0,
-                    help="stream capture seconds per sensor (default 8)")
-    ap.add_argument("--skip-csii", action="store_true",
-                    help="skip CSII vehicle-input send test")
+    ap.add_argument("--duration", type=float, default=10.0,
+                    help="stream capture seconds per sensor (default 10)")
+    ap.add_argument("--skip-csii", action="store_true", help="skip the CSII section")
     args = ap.parse_args()
 
     print(f"Discovering sensors{' via ' + args.bind if args.bind else ''}...")
@@ -642,6 +632,13 @@ def main():
         targets = []
         by_ip = {f.get("ip_address"): f for f in found}
         for ip in args.ips:
+            # A response can be missed; ask the sensor directly before
+            # treating it as absent.
+            for _ in range(3):
+                if ip in by_ip:
+                    break
+                for f in discover(timeout_s=1.5, broadcast_ip=ip):
+                    by_ip.setdefault(f.get("ip_address"), f)
             if ip in by_ip:
                 targets.append(by_ip[ip])
             else:

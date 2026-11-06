@@ -5,9 +5,13 @@ Supports TCP (default) and UDP transport modes.
 TCP: connects to sensor and reads SOME/IP framed messages.
 UDP: listens on local ports for SOME/IP-TP segmented events.
 
-Protocol v3.0: every stream payload carries a 20B E2E Profile 7 header
-(CRC-64/XZ) ahead of the ISO 23150 payload — parsing lives in
+Interface v1.1.0: every stream payload carries a 20B E2E header
+(CRC-32 over the body) ahead of the ISO 23150 payload — parsing lives in
 afi_sdk.streams.
+
+The transport is the sensor's own stream setting (it changes only through
+the diagnostic access mode and a restart); the optional argument only
+states which one to expect.
 
 Usage:
     python sample_data_stream.py [sensor_ip] [duration_sec] [tcp|udp]
@@ -20,49 +24,26 @@ import struct
 import sys
 import threading
 import time
-from typing import Dict
-
 from afi_sdk.someip import (
-    SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE, EVENT_RDI, EVENT_SHII, EVENT_SPI, MSG_TYPE_TP,
+    SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE, SERVICE_ID, PROTO_VER, IFACE_VER,
+    EVENT_RDI, EVENT_SHII, EVENT_SPI,
+    MSG_TYPE_NOTIFICATION, MSG_TYPE_TP,
     DEFAULT_RDI_PORT, DEFAULT_SHII_PORT, DEFAULT_SPI_PORT,
 )
-from afi_sdk.streams import strip_e2e, parse_rdi_frame, parse_rdi_detection
+from afi_sdk.streams import (
+    E2E_HEADER_SIZE, E2E_DATA_ID_RDI, E2E_DATA_ID_SHII,
+    E2E_DATA_ID_SPI,
+    RDI_MAX_PAYLOAD_SIZE,
+    SomeipTpReassembler, strip_e2e,
+    parse_rdi_frame, parse_rdi_detection,
+)
 
 
-# ── SOME/IP-TP Reassembler ──
-
-class TpReassembler:
-    """Reassemble SOME/IP-TP segmented messages (for RDI)."""
-
-    def __init__(self):
-        self._buffers: Dict[int, bytearray] = {}
-        self.completed_frames = 0
-        self.total_segments = 0
-
-    def feed(self, tp_header: bytes, payload: bytes,
-             session_id: int) -> bytes:
-        """Feed a TP segment. Returns complete payload when done, else b""."""
-        self.total_segments += 1
-        offset_raw = struct.unpack(">I", tp_header)[0]
-        more_flag = offset_raw & 0x01
-        offset_bytes = (offset_raw >> 4) * 16
-
-        if session_id not in self._buffers:
-            self._buffers[session_id] = bytearray()
-
-        buf = self._buffers[session_id]
-        end = offset_bytes + len(payload)
-        if end > len(buf):
-            buf.extend(b"\x00" * (end - len(buf)))
-        buf[offset_bytes:end] = payload
-
-        if more_flag == 0:
-            result = bytes(buf)
-            del self._buffers[session_id]
-            self.completed_frames += 1
-            return result
-
-        return b""
+E2E_DATA_IDS = {
+    EVENT_RDI: E2E_DATA_ID_RDI,
+    EVENT_SHII: E2E_DATA_ID_SHII,
+    EVENT_SPI: E2E_DATA_ID_SPI,
+}
 
 
 # ── Stream Receiver (TCP / UDP) ──
@@ -88,7 +69,12 @@ class StreamReceiver:
         self._running = False
         self._sock = None
         self._thread = None
-        self._tp = TpReassembler() if event_id == EVENT_RDI else None
+        tp_limits = {
+            EVENT_RDI: E2E_HEADER_SIZE + RDI_MAX_PAYLOAD_SIZE,
+        }
+        self._tp = (SomeipTpReassembler(tp_limits[event_id])
+                    if event_id in tp_limits else None)
+        self._max_frame_size = SOMEIP_HEADER_SIZE + tp_limits.get(event_id, 64 * 1024)
         self._first_frame = None
 
     def start(self):
@@ -105,8 +91,12 @@ class StreamReceiver:
 
     def _deliver(self, frame: bytes):
         """Strip/verify E2E and record the ISO payload."""
-        e2e, payload = strip_e2e(frame)
+        e2e, payload = strip_e2e(
+            frame, expected_data_id=E2E_DATA_IDS[self.event_id])
         if e2e is None:
+            return
+        if not e2e["length_ok"] or not e2e["data_id_ok"]:
+            self.e2e_errors += 1
             return
         if not e2e.get("crc_ok", True):
             self.e2e_errors += 1
@@ -142,6 +132,8 @@ class StreamReceiver:
                 if len(hdr) < 8:
                     break
                 length = struct.unpack(">I", hdr[4:8])[0]
+                if length < 8 or length + 8 > self._max_frame_size:
+                    break
                 rest = self._recv_exact(length)
                 if len(rest) < length:
                     break
@@ -151,6 +143,13 @@ class StreamReceiver:
                 self.bytes_recv += len(data)
 
                 if len(data) < SOMEIP_HEADER_SIZE:
+                    continue
+
+                h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
+                if (h[0] != SERVICE_ID or h[1] != self.event_id
+                        or h[2] + 8 != len(data) or h[5] != PROTO_VER
+                        or h[6] != IFACE_VER or h[7] != MSG_TYPE_NOTIFICATION
+                        or h[8] != 0):
                     continue
 
                 # Payload starts after 16-byte SOME/IP header (no TP over TCP)
@@ -183,6 +182,11 @@ class StreamReceiver:
             self.bytes_recv += len(data)
 
             h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
+            if (h[0] != SERVICE_ID or h[1] != self.event_id
+                    or h[2] + 8 != len(data) or h[5] != PROTO_VER
+                    or h[6] != IFACE_VER
+                    or (h[7] & ~MSG_TYPE_TP) != MSG_TYPE_NOTIFICATION or h[8] != 0):
+                continue
             msg_type = h[7]
             session_id = h[4]
             payload = data[SOMEIP_HEADER_SIZE:]
@@ -218,10 +222,8 @@ def main():
     print(f"  Transport: {transport.upper()}")
     print()
 
-    # Configure sensor to match our transport mode.
-    # Protocol-only partial update: never touch the destination IPs —
-    # a unicast destination makes the sensor reject TCP clients connecting
-    # from any other host IP (multi-NIC pitfall).
+    # Use the transport the sensor is set to. Changing it needs the
+    # diagnostic access mode and a restart (see README, Configuration).
     try:
         from afi_sdk import AfiSdk, AfiSdkConfig
         sdk = AfiSdk()
@@ -229,19 +231,14 @@ def main():
             net = sdk.get_network_config() or {}
             current = {net.get(f"{s}_protocol") for s in
                        ("detection", "health", "performance")}
-            if current != {transport}:
-                sdk.set_network_config(
-                    detection_protocol=transport,
-                    health_protocol=transport,
-                    performance_protocol=transport,
-                )
-                print(f"  Sensor streams switched to {transport.upper()}")
-                time.sleep(1.0)  # stream channels reconnect after the change
-            else:
-                print(f"  Sensor streams already {transport.upper()}")
+            if len(current) == 1 and None not in current:
+                configured = current.pop()
+                if configured != transport:
+                    print(f"  Sensor streams are {configured.upper()}; using that")
+                    transport = configured
             sdk.close()
     except Exception as e:
-        print(f"  Warning: could not configure sensor protocol ({e})")
+        print(f"  Warning: could not read the sensor stream setting ({e})")
 
     # Create receivers for each stream type
     receivers = [
@@ -296,7 +293,7 @@ def main():
                           f"az={det['azimuth']:.3f}rad "
                           f"el={det['elevation']:.3f}rad "
                           f"vel={det['radial_velocity']:.2f}m/s "
-                          f"rcs={det['rcs']:.1f}dBm2")
+                          f"rcs={det['rcs']:.1f}dBsm")
 
     total_packets = sum(r.packets for r in receivers)
     total_bytes = sum(r.bytes_recv for r in receivers)

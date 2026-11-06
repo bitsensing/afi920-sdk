@@ -1,6 +1,6 @@
 /**
  * @file test_shi_parser.cpp
- * @brief Unit test: SHII v3.0 variable-length payload parsing
+ * @brief Unit test: SHII variable-length payload parsing (shi.ksy)
  */
 #include "protocol/shi_parser.h"
 #include "test_common.h"
@@ -16,7 +16,7 @@ static void pack_le64(uint8_t* p, uint64_t v) {
     for (int i = 0; i < 8; i++) p[i] = (v >> (8 * i)) & 0xFF;
 }
 
-// Build a synthetic SHII payload following the v3.0 serializer order:
+// Build a synthetic SHII payload following the serializer order:
 // CIH(24) | n_op + modes | defect(2) | supply/temp(2) |
 // n_in + types + statuses | time_sync | n_cal + comp + status + state
 static std::vector<uint8_t> make_shi(uint8_t n_op, uint8_t n_in, uint8_t n_cal) {
@@ -86,6 +86,31 @@ TEST(parse_full_message) {
     PASS("parse_full_message");
 }
 
+TEST(data_qualifier_1_and_6_are_delivered) {
+    for (uint8_t dq : {uint8_t{1}, uint8_t{6}}) {
+        auto buf = make_shi(1, 1, 1);
+        buf[23] = dq;
+        ShiParser parser;
+        AfiShiMessage msg{};
+        CHECK(parser.Parse(buf.data(), buf.size(), msg) == 0);
+        CHECK(static_cast<uint8_t>(msg.data_qualifier) == dq);
+    }
+    PASS("data_qualifier_1_and_6_are_delivered");
+}
+
+TEST(parse_ultra_dual_range_operation_mode) {
+    // v1.1.0 adds SOM_Normal_UltraDualRange (6).
+    auto buf = make_shi(1, 1, 1);
+    buf[25] = BTS_SHI_SOM_NORMAL_ULTRA_DUAL_RANGE;
+
+    ShiParser parser;
+    AfiShiMessage msg{};
+    CHECK(parser.Parse(buf.data(), buf.size(), msg) == 0);
+    CHECK(msg.num_valid_operation_modes == 1);
+    CHECK(msg.sensor_operation_modes[0] == 6);
+    PASS("parse_ultra_dual_range_operation_mode");
+}
+
 TEST(parse_minimal_message) {
     // All counts zero — minimum 32B
     auto buf = make_shi(0, 0, 0);
@@ -120,17 +145,18 @@ TEST(truncated_rejected) {
     PASS("truncated_rejected");
 }
 
-TEST(count_overflow_clamped) {
+TEST(malformed_count_and_length_rejected) {
     auto buf = make_shi(11, 4, 3);
     buf[24] = 200;  // n_op far above max 11
 
     ShiParser parser;
     AfiShiMessage msg{};
-    // Clamped count no longer matches the actual wire layout, so the parse
-    // may fail — it must not overflow the fixed-size struct arrays either way.
-    parser.Parse(buf.data(), buf.size(), msg);
-    CHECK(msg.num_valid_operation_modes <= BTS_SHI_MAX_OPERATION_MODES);
-    PASS("count_overflow_clamped");
+    CHECK(parser.Parse(buf.data(), buf.size(), msg) < 0);
+
+    buf = make_shi(1, 1, 1);
+    buf.push_back(0xAA);  // trailing bytes are outside the count-driven layout
+    CHECK(parser.Parse(buf.data(), buf.size(), msg) < 0);
+    PASS("malformed_count_and_length_rejected");
 }
 
-TEST_MAIN("SHII Parser Tests (v3.0 variable length)")
+TEST_MAIN("SHII Parser Tests (variable length)")

@@ -34,7 +34,7 @@ struct AfiSdkConfig {
     /// Port for SPI (Sensor Performance Interface)
     uint16_t spi_port = 30511;
 
-    /// Port for CSII vehicle input (Host → Radar, TCP only)
+    /// Port for CSII vehicle input (Host → Radar; UDP on v1.1.0, TCP on v1.0.x)
     uint16_t csii_port = 30501;
 
     /// Default data stream transport protocol ("tcp" or "udp", default is TCP)
@@ -52,10 +52,12 @@ struct AfiSdkConfig {
     /// Auto-connect Config API (TCP) on Init()
     bool enable_config_api = true;
 
-    /// Verify the E2E Profile 7 CRC-64 on received data streams
+    /// Verify the E2E CRC-32 on received data streams. A failed check (CRC,
+    /// zero CRC, Length, Data ID) is logged as a warning and the frame is
+    /// still delivered.
     bool validate_e2e = true;
 
-    /// Drop frames whose E2E CRC does not match (otherwise warn and deliver)
+    /// Drop frames that fail the E2E check (default: warn and deliver)
     bool e2e_strict = false;
 
     /// Socket receive buffer size (SO_RCVBUF) for both TCP and UDP
@@ -66,6 +68,20 @@ struct AfiSdkConfig {
 
     /// Config API request timeout in milliseconds
     int request_timeout_ms = 5000;
+
+    // v1.0.2 additions are appended to preserve the order and offsets of the
+    // original public members for existing aggregate-style callers.
+
+    /// Optional per-stream transport overrides (empty = stream_transport)
+    std::string rdi_transport;
+    std::string shi_transport;
+    std::string spi_transport;
+
+    /// CSII transport: empty picks it from the sensor's interface generation
+    /// (UDP on v1.1.0, TCP on v1.0.x, UDP while unknown); "udp" or "tcp"
+    /// forces one. The generation is unknown only while the Config API is
+    /// off and no stream frame has arrived.
+    std::string csii_transport;
 };
 
 } // namespace afi

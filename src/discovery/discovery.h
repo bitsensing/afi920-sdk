@@ -31,7 +31,8 @@ public:
                                             uint16_t port = 30520,
                                             const std::string& bind_ip = "");
 
-private:
+    /// Parse one response JSON payload (after the SOME/IP header).
+    /// @return 0 on success, negative on a parse error or non-zero return_code
     static int ParseResponse(const uint8_t* data, size_t len, AfiSensorInfo& out);
 };
 
