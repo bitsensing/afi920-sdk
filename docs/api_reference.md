@@ -484,13 +484,13 @@ Call `RebindStorage()` after resizing or replacing `detections_storage` directly
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `existence_probability` | `uint8_t` | Existence probability (0-100 %) |
+| `existence_probability` | `uint8_t` | Existence probability (%, 1 to 100 from interface v1.2.0) |
 | `detection_id` | `uint16_t` | Detection ID (`0xFFFF` if unused) |
 | `object_id_reference` | `uint16_t` | Associated object ID (reserved) |
 | `timestamp_difference` | `float` | Time offset to the message timestamp (s) |
 | `radar_cross_section` | `float` | RCS (dBsm) |
 | `signal_to_noise_ratio` | `float` | SNR (dB) |
-| `ambiguity_grouping_id` | `uint16_t` | Ambiguity group (`0xFFFF` if unused) |
+| `ambiguity_grouping_id` | `uint16_t` | Ambiguity group (always 0, not supported by the sensor) |
 | `position_radial_distance` | `float` | Range (m) |
 | `position_azimuth` | `float` | Azimuth (rad) |
 | `position_elevation` | `float` | Elevation (rad) |
