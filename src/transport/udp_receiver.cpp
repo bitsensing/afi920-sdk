@@ -91,6 +91,7 @@ int UdpReceiver::Receive(uint8_t* buf, size_t buf_size,
 #endif
         return -1;
     }
+    if (n == 0) return 0;  // empty datagram (Wake) carries no message
 
     if (filter_source_ && sender.sin_addr.s_addr != expected_source_.s_addr) {
         ++foreign_drops_;
@@ -114,6 +115,20 @@ bool UdpReceiver::SetExpectedSource(const std::string& ip) {
     }
     filter_source_ = true;
     return true;
+}
+
+void UdpReceiver::Wake() {
+    if (socket_ == kInvalidSocket) return;
+    struct sockaddr_in self{};
+    socklen_t self_len = sizeof(self);
+    if (::getsockname(socket_, reinterpret_cast<struct sockaddr*>(&self), &self_len) != 0) {
+        return;
+    }
+    self.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socket_t s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == kInvalidSocket) return;
+    ::sendto(s, "", 0, 0, reinterpret_cast<struct sockaddr*>(&self), sizeof(self));
+    platform_close_socket(s);
 }
 
 void UdpReceiver::Close() {

@@ -170,8 +170,7 @@ def write_settings(sdk, snap, c, sec):
     net = {k: snap["network"][k] for k in STREAM_KEYS}
     c.check(sec, sdk.set_network_config(**net) is not None, "SetNetworkConfig", sdk.last_error)
     th = snap["threshold"]
-    kw = {"snr_db": th["snr_threshold_db"],
-          "cfar_table_first_frame": th["cfar_table_first_frame"]}
+    kw = {"cfar_table_first_frame": th["cfar_table_first_frame"]}
     if "cfar_table_second_frame" in th:
         kw["cfar_table_second_frame"] = th["cfar_table_second_frame"]
     c.check(sec, sdk.set_detection_threshold(**kw) == OK, "SetDetectionThreshold", sdk.last_error)
@@ -232,7 +231,6 @@ def section_set_sweep(sdk, ip, base, c):
     want["network"] = dict(base["network"])
     want["network"].update(health_protocol="udp", health_port=UDP_TEST_PORT)
     th = dict(base["threshold"])
-    th["snr_threshold_db"] = 6.5 if th["snr_threshold_db"] != 6.5 else 4.25
     th["cfar_table_first_frame"] = [(i % 9) + 1 for i in range(19)]
     want["threshold"] = th
     want["filters"] = {k: (not v) for k, v in base["filters"].items()}
@@ -312,10 +310,10 @@ def section_defaults(sdk, ip, base, c):
     c.check(sec, net.get("ip_address") == ip, "ResetAllSettings keeps the sensor address",
             net.get("ip_address"))
     after = snapshot(sdk)
-    c.info(sec, "after ResetAllSettings: range=%s ptp=%s threshold.snr=%s "
+    c.info(sec, "after ResetAllSettings: range=%s ptp=%s cfar_first=%s "
                 "destinations=%s" % (
                     after["range_mode"], after["ptp_profile"],
-                    (after["threshold"] or {}).get("snr_threshold_db"),
+                    (after["threshold"] or {}).get("cfar_table_first_frame"),
                     {k: net.get(k) for k in STREAM_KEYS}))
 
 

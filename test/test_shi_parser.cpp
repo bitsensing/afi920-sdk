@@ -31,6 +31,7 @@ static std::vector<uint8_t> make_shi(uint8_t n_op, uint8_t n_in, uint8_t n_cal) 
     buf[22] = 0; buf[23] = 0;
 
     buf.push_back(n_op);
+    // 50 and 201 are not defined by interface v1.2.0; the parser passes them through.
     static const uint8_t kModes[] = {0, 1, 2, 3, 4, 5, 10, 50, 100, 200, 201};
     for (uint8_t i = 0; i < n_op; i++) buf.push_back(kModes[i]);
 
@@ -48,7 +49,7 @@ static std::vector<uint8_t> make_shi(uint8_t n_op, uint8_t n_in, uint8_t n_cal) 
     buf.push_back(n_cal);
     for (uint8_t i = 0; i < n_cal; i++) buf.push_back(i);       // components
     for (uint8_t i = 0; i < n_cal; i++) buf.push_back(1);       // statuses: NOT_CALIBRATED
-    for (uint8_t i = 0; i < n_cal; i++) buf.push_back(2);       // states: INITIAL_CAL_FAILED
+    for (uint8_t i = 0; i < n_cal; i++) buf.push_back(2);       // states: SCST_IN_PROGRESS
 
     return buf;
 }
@@ -65,9 +66,9 @@ TEST(parse_full_message) {
     CHECK(msg.num_valid_operation_modes == 11);
     CHECK(msg.sensor_operation_modes[4] == 4);    // ULR
     CHECK(msg.sensor_operation_modes[5] == 5);    // USR
-    CHECK(msg.sensor_operation_modes[7] == 50);   // Evaluation
-    CHECK(msg.sensor_operation_modes[8] == 100);  // Calibration (EOL)
-    CHECK(msg.sensor_operation_modes[10] == 201); // TestMode
+    CHECK(msg.sensor_operation_modes[7] == 50);   // undefined, passed through
+    CHECK(msg.sensor_operation_modes[8] == BTS_SHI_SOM_FAULT_MODE);
+    CHECK(msg.sensor_operation_modes[10] == 201); // undefined, passed through
 
     CHECK(msg.sensor_defect_recognised == BTS_SHI_SDR_NOT_FULLY_FUNCTIONAL);
     CHECK(msg.sensor_defect_reason == BTS_SHI_SDR_EXTERNALLY_DISTURBED);

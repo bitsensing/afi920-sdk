@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "afi_sdk_impl.h"
 #include "discovery/discovery.h"
+#include "protocol/interface_version.h"
 #include "util/endian_util.h"
 #include "util/logger.h"
 #include "bts_iso23150_e2e.h"
@@ -32,11 +33,19 @@ bool ResolveTransport(const std::string& default_transport,
     return false;
 }
 
+bool IsRdiEvent(uint16_t event) {
+    return event == kEventRdi ||
+           (event >= kEventRdiChunkBase && event < kEventRdiChunkBase + kRdiMaxChunks);
+}
+
+// expected_event kEventRdi also accepts the v1.2.0 chunk Events.
 bool ValidateStreamMessage(const uint8_t* data, size_t len,
                            uint16_t expected_event, const char* stream_name,
                            SomeipHeader& hdr) {
     if (someip_deserialize(data, len, hdr) < 0) return false;
-    if (hdr.service_id != kSomeipServiceId || hdr.method_id != expected_event) {
+    const bool rdi = expected_event == kEventRdi;
+    if (hdr.service_id != kSomeipServiceId ||
+        (rdi ? !IsRdiEvent(hdr.method_id) : hdr.method_id != expected_event)) {
         return false;
     }
     if (hdr.length < 8 || static_cast<size_t>(hdr.length) + 8 != len) {
@@ -46,14 +55,31 @@ bool ValidateStreamMessage(const uint8_t* data, size_t len,
     }
     const uint8_t base_type = static_cast<uint8_t>(
         hdr.message_type & static_cast<uint8_t>(~kSomeipMsgTypeTpFlag));
+    // Interface Version 0x02 marks the v1.2.0 RDI header/chunk messages,
+    // which never use SOME/IP-TP; chunk Events exist only there.
+    const bool chunked = rdi &&
+        hdr.interface_version == kSomeipInterfaceVersionRdi &&
+        !someip_is_tp(hdr.message_type);
+    const bool single = hdr.interface_version == kSomeipInterfaceVersion &&
+        (!rdi || hdr.method_id == kEventRdi);
     if (hdr.protocol_version != kSomeipProtocolVersion ||
-        hdr.interface_version != kSomeipInterfaceVersion ||
+        !(chunked || single) ||
         base_type != kSomeipMsgTypeNotify || hdr.return_code != kSomeipReturnOk) {
         AFI_LOG_WARN("%s invalid SOME/IP envelope", stream_name);
         return false;
     }
     return true;
 }
+
+uint64_t SteadyNowNs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+// RDI UDP receive timeout: the v1.2.0 scan timeout (100 ms) is checked
+// between receives.
+constexpr int kRdiPollMs = 20;
 
 } // namespace
 
@@ -116,6 +142,9 @@ int AfiSdk::GetDiagnosticInfo(AfiDiagnosticInfo& out) { DELEGATE_CONFIG(GetDiagn
 int AfiSdk::Restart() { DELEGATE_CONFIG(Restart); }
 int AfiSdk::ResetAllSettings() { DELEGATE_CONFIG(ResetAllSettings); }
 int AfiSdk::GetCommandHistoryInfo(AfiCommandHistory& out) { DELEGATE_CONFIG(GetCommandHistoryInfo, out); }
+int AfiSdk::GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count, AfiFaultLogPage& out) {
+    DELEGATE_CONFIG(GetFaultLog, ring, slot, count, out);
+}
 
 // Network (0x002x)
 int AfiSdk::GetNetworkConfig(AfiNetworkConfig& out) { DELEGATE_CONFIG(GetNetworkConfig, out); }
@@ -217,6 +246,13 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
     };
 
     stream_generation_.store(AfiInterfaceGeneration::kUnknown);
+    rdi_assembler_.Reset();
+    rdi_emit_ = [this](AfiRdiFrame& frame) {
+        // The Counter is outside the CRC; a scan that failed its check does
+        // not move the loss baseline.
+        if (!config_.validate_e2e || frame.e2e_valid) TrackRdiLoss(frame.e2e_counter);
+        DeliverRdiScan(frame);
+    };
     if (!config_.csii_transport.empty() && config_.csii_transport != "udp" &&
         config_.csii_transport != "tcp") {
         AFI_LOG_ERROR("Invalid CSII transport '%s' (expected tcp, udp or empty)",
@@ -260,7 +296,8 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
                               config_.sensor_ip.c_str(), config_.rdi_port);
                 return fail_init(kConnectFailed);
             }
-        } else if (rdi_udp_.Open(config_.rdi_port, config_.socket_buffer_size) < 0) {
+        } else if (rdi_udp_.Open(config_.rdi_port, config_.socket_buffer_size,
+                                  kRdiPollMs) < 0) {
             AFI_LOG_ERROR("Failed to open RDI UDP receiver on port %d", config_.rdi_port);
             return fail_init(kConnectFailed);
         }
@@ -295,8 +332,8 @@ int AfiSdk::Impl::Init(const AfiSdkConfig& config) {
             return fail_init(kConnectFailed);
         }
     }
-    // UDP streams accept only the sensor's own datagrams (12_System_Log tells
-    // radars apart by source IP); see SetExpectedSource.
+    // UDP streams accept only the sensor's own datagrams (radars are told
+    // apart by source IP); see SetExpectedSource.
     for (UdpReceiver* udp : {&rdi_udp_, &shi_udp_, &spi_udp_}) {
         if (udp->IsOpen()) udp->SetExpectedSource(config_.sensor_ip);
     }
@@ -335,13 +372,15 @@ int AfiSdk::Impl::Stop() {
 
     running_.store(false);
 
-    // Close receivers to unblock recv.
-    if (rdi_tcp_) { rdi_tcp_->SetStopping(); rdi_tcp_->Close(); }
-    else rdi_udp_.Close();
-    if (shi_tcp_) { shi_tcp_->SetStopping(); shi_tcp_->Close(); }
-    else shi_udp_.Close();
-    if (spi_tcp_) { spi_tcp_->SetStopping(); spi_tcp_->Close(); }
-    else spi_udp_.Close();
+    // Wake the receive threads; the sockets close after the join. A socket
+    // closed under a pending Winsock recv lets the cancelled receive write
+    // its status into the receiving thread's stack after recv has returned.
+    if (rdi_tcp_) rdi_tcp_->Shutdown();
+    else rdi_udp_.Wake();
+    if (shi_tcp_) shi_tcp_->Shutdown();
+    else shi_udp_.Wake();
+    if (spi_tcp_) spi_tcp_->Shutdown();
+    else spi_udp_.Wake();
 
     // Join threads
     if (rdi_thread_ && rdi_thread_->joinable()) rdi_thread_->join();
@@ -351,6 +390,13 @@ int AfiSdk::Impl::Stop() {
     rdi_thread_.reset();
     shi_thread_.reset();
     spi_thread_.reset();
+
+    if (rdi_tcp_) rdi_tcp_->Close();
+    else rdi_udp_.Close();
+    if (shi_tcp_) shi_tcp_->Close();
+    else shi_udp_.Close();
+    if (spi_tcp_) spi_tcp_->Close();
+    else spi_udp_.Close();
 
     // Disconnect TCP
     csii_sender_.Disconnect();
@@ -427,8 +473,13 @@ bool AfiSdk::Impl::CsiiUsesTcp() const {
 
 AfiInterfaceGeneration AfiSdk::Impl::Generation() const {
     const AfiInterfaceGeneration probed = tcp_client_.Generation();
-    return probed != AfiInterfaceGeneration::kUnknown ? probed
-                                                      : stream_generation_.load();
+    const AfiInterfaceGeneration stream = stream_generation_.load();
+    // The E2E header cannot tell v1.1.0 from v1.2.0; the streams can.
+    if (probed == AfiInterfaceGeneration::kV1_1 &&
+        stream == AfiInterfaceGeneration::kV1_2) {
+        return stream;
+    }
+    return probed != AfiInterfaceGeneration::kUnknown ? probed : stream;
 }
 
 // ─── Thread Functions ───
@@ -446,8 +497,9 @@ void AfiSdk::Impl::RdiThreadFunc() {
         int n = rdi_use_tcp_
             ? rdi_tcp_->Receive(buf, kAfiWireFrameSafetyLimit)
             : rdi_udp_.Receive(buf.data(), buf.size());
-        if (n <= 0) continue;
-        ProcessRdiDatagram(buf.data(), static_cast<size_t>(n));
+        if (n > 0) ProcessRdiDatagram(buf.data(), static_cast<size_t>(n));
+        // Close a v1.2.0 scan whose header B never came (Interface Overview §3.2.3).
+        rdi_assembler_.Poll(SteadyNowNs(), rdi_emit_);
     }
 
     AFI_LOG_INFO("RDI thread stopped");
@@ -490,6 +542,7 @@ void AfiSdk::Impl::SpiThreadFunc() {
 }
 
 
+
 // ─── Datagram Processing ───
 
 bool AfiSdk::Impl::ConsumeE2eHeader(const uint8_t*& payload, size_t& payload_len,
@@ -497,7 +550,9 @@ bool AfiSdk::Impl::ConsumeE2eHeader(const uint8_t*& payload, size_t& payload_len
                                     uint32_t expected_data_id,
                                     uint64_t& failure_count,
                                     E2eHeader* parsed_header,
-                                    bool* e2e_valid) {
+                                    bool* e2e_valid,
+                                    AfiInterfaceGeneration known_generation,
+                                    bool allow_zero_crc) {
     if (e2e_valid) *e2e_valid = false;
     if (payload_len < kE2eHeaderSize) {
         AFI_LOG_WARN("%s frame shorter than E2E header: %zu", stream_name, payload_len);
@@ -506,7 +561,12 @@ bool AfiSdk::Impl::ConsumeE2eHeader(const uint8_t*& payload, size_t& payload_len
 
     E2eHeader e2e;
     const E2eStatus st = e2e_validate(payload, payload_len, e2e,
-                                      expected_data_id, config_.validate_e2e);
+                                      expected_data_id, config_.validate_e2e,
+                                      allow_zero_crc);
+    e2e.generation = known_generation != AfiInterfaceGeneration::kUnknown
+        ? known_generation
+        : RefineGeneration(e2e.generation, payload + kE2eHeaderSize,
+                           payload_len - kE2eHeaderSize);
     if (st == E2eStatus::kOk) {
         if (e2e_valid) *e2e_valid = config_.validate_e2e;
         stream_generation_.store(e2e.generation);
@@ -539,13 +599,21 @@ void AfiSdk::Impl::DeliverWirePayload(AfiStreamKind stream,
                                       size_t iso_payload_len,
                                       uint64_t recv_timestamp_ns,
                                       const E2eHeader* e2e,
-                                      bool e2e_valid) {
+                                      bool e2e_valid,
+                                      const SomeipHeader& someip) {
     if (!wire_payload_cb_ || !wire_payload) return;
 
     AfiWirePayloadFrame frame;
     frame.stream = stream;
     frame.recv_timestamp_ns = recv_timestamp_ns;
-    if (iso_payload && iso_payload_len >= 18) {
+    frame.event_id = someip.method_id;
+    frame.someip_interface_version = someip.interface_version;
+    if (stream == AfiStreamKind::kDetection && someip.method_id >= kEventRdiChunkBase) {
+        // v1.2.0 RDI chunk: Chunk Header MessageCounter, no ISO23150 Header.
+        if (iso_payload && iso_payload_len >= 4) {
+            frame.message_counter = detail::unpack_le32(iso_payload);
+        }
+    } else if (iso_payload && iso_payload_len >= 18) {
         frame.sensor_timestamp_ns = detail::unpack_le64(iso_payload + 6);
         frame.message_counter = detail::unpack_le32(iso_payload + 14);
     }
@@ -567,8 +635,8 @@ void AfiSdk::Impl::TrackRdiLoss(uint32_t e2e_counter) {
         return;
     }
     // The E2E Counter advances once per send slot, so a gap is a missed
-    // slot (System Spec §8.2). A decrease marks a radar restart and starts a
-    // new baseline (§8.4). A repeat is not counted as loss.
+    // slot (Interface Overview §3.2.3). A decrease marks a radar restart and starts a
+    // new baseline (§3.2.3). A repeat is not counted as loss.
     const uint32_t delta = e2e_counter - last_rdi_e2e_counter_;
     last_rdi_e2e_counter_ = e2e_counter;
     if (delta == 0 || delta >= 0x80000000u) return;
@@ -581,6 +649,13 @@ void AfiSdk::Impl::TrackRdiLoss(uint32_t e2e_counter) {
 void AfiSdk::Impl::ProcessRdiDatagram(const uint8_t* data, size_t len) {
     SomeipHeader hdr;
     if (!ValidateStreamMessage(data, len, kEventRdi, "RDI", hdr)) return;
+    if (hdr.interface_version == kSomeipInterfaceVersionRdi) {
+        ProcessRdiChunked(data, len, hdr);
+        return;
+    }
+
+    // Single-message format (interface v1.0.x and v1.1.0): one Event 0x8002
+    // message per scan, split by SOME/IP-TP over UDP.
 
     bool is_tp = someip_is_tp(hdr.message_type);
     size_t offset = kSomeipHeaderSize;
@@ -626,12 +701,10 @@ void AfiSdk::Impl::ProcessRdiDatagram(const uint8_t* data, size_t len) {
         return;
     }
 
-    const uint64_t recv_timestamp_ns = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+    const uint64_t recv_timestamp_ns = SteadyNowNs();
     DeliverWirePayload(AfiStreamKind::kDetection, wire_payload,
                        wire_payload_len, payload, payload_len,
-                       recv_timestamp_ns, &e2e, e2e_valid);
+                       recv_timestamp_ns, &e2e, e2e_valid, hdr);
 
     // The Counter is outside the CRC; a frame that failed its check does not
     // move the loss baseline.
@@ -640,19 +713,55 @@ void AfiSdk::Impl::ProcessRdiDatagram(const uint8_t* data, size_t len) {
     // Typed decode is a separate, opt-in consumer of the payload path.
     if (rdi_cb_) {
         AfiRdiFrame frame{};
-        frame.recv_timestamp_ns = recv_timestamp_ns;
-        frame.frame_seq = rdi_frame_seq_.fetch_add(1);
-        frame.e2e_counter = e2e.counter;
-        frame.e2e_checked = config_.validate_e2e;
-        frame.e2e_valid = e2e_valid;
-        frame.generation = e2e.generation;
         if (rdi_parser_.Parse(payload, payload_len, frame) == 0) {
-            rdi_cb_(frame);
+            frame.recv_timestamp_ns = recv_timestamp_ns;
+            frame.e2e_counter = e2e.counter;
+            frame.e2e_valid = e2e_valid;
+            frame.generation = e2e.generation;
+            DeliverRdiScan(frame);
         }
     }
 
     // Reset TP buffer after parsing (payload pointer must remain valid during Parse)
     if (is_tp) rdi_tp_.Reset();
+}
+
+void AfiSdk::Impl::ProcessRdiChunked(const uint8_t* data, size_t len,
+                                     const SomeipHeader& hdr) {
+    const uint8_t* payload = data + kSomeipHeaderSize;
+    size_t payload_len = len - kSomeipHeaderSize;
+    const uint8_t* wire_payload = payload;
+    const size_t wire_payload_len = payload_len;
+    E2eHeader e2e;
+    bool e2e_valid = false;
+    // The Data ID is the MessageID32: 0x60008002 for the headers and
+    // 0x60008100 + k for chunk k.
+    if (!ConsumeE2eHeader(payload, payload_len, "RDI",
+                          BTS_E2E_DATA_ID(hdr.method_id), e2e_failures_[0],
+                          &e2e, &e2e_valid, AfiInterfaceGeneration::kV1_2)) {
+        return;
+    }
+
+    const uint64_t recv_timestamp_ns = SteadyNowNs();
+    DeliverWirePayload(AfiStreamKind::kDetection, wire_payload,
+                       wire_payload_len, payload, payload_len,
+                       recv_timestamp_ns, &e2e, e2e_valid, hdr);
+
+    if (hdr.method_id == kEventRdi) {
+        rdi_assembler_.OnHeader(e2e.counter, e2e_valid, payload, payload_len,
+                                recv_timestamp_ns, rdi_emit_);
+    } else {
+        rdi_assembler_.OnChunk(e2e.counter, e2e_valid,
+                               static_cast<uint16_t>(hdr.method_id - kEventRdiChunkBase),
+                               payload, payload_len, recv_timestamp_ns, rdi_emit_);
+    }
+}
+
+void AfiSdk::Impl::DeliverRdiScan(AfiRdiFrame& frame) {
+    if (!rdi_cb_) return;
+    frame.frame_seq = rdi_frame_seq_.fetch_add(1);
+    frame.e2e_checked = config_.validate_e2e;
+    rdi_cb_(frame);
 }
 
 void AfiSdk::Impl::ProcessShiDatagram(const uint8_t* data, size_t len) {
@@ -676,7 +785,7 @@ void AfiSdk::Impl::ProcessShiDatagram(const uint8_t* data, size_t len) {
             std::chrono::steady_clock::now().time_since_epoch()).count());
     DeliverWirePayload(AfiStreamKind::kHealth, wire_payload,
                        wire_payload_len, payload, payload_len,
-                       recv_timestamp_ns, &e2e, e2e_valid);
+                       recv_timestamp_ns, &e2e, e2e_valid, hdr);
 
     if (shi_cb_ || shi_meta_cb_) {
         AfiShiMessage msg{};
@@ -712,7 +821,7 @@ void AfiSdk::Impl::ProcessSpiDatagram(const uint8_t* data, size_t len) {
             std::chrono::steady_clock::now().time_since_epoch()).count());
     DeliverWirePayload(AfiStreamKind::kPerformance, wire_payload,
                        wire_payload_len, payload, payload_len,
-                       recv_timestamp_ns, &e2e, e2e_valid);
+                       recv_timestamp_ns, &e2e, e2e_valid, hdr);
 
     if (spi_cb_ || spi_meta_cb_) {
         AfiSpiMessage msg{};

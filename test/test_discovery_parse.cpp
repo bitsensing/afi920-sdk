@@ -2,8 +2,9 @@
  * @file test_discovery_parse.cpp
  * @brief Unit test: Discovery response parsing and the interface generation
  *
- * driver_hash exists only in interface v1.0.x responses, the m72_* keys only
- * in v1.1.0 ones. The v1.0.x response is the one a firmware 3.0.0 sensor sent.
+ * if_version exists from interface v1.2.0 on. Before it driver_hash exists
+ * only in v1.0.x responses and the m72_* keys only in v1.1.0 ones. The v1.0.x
+ * response is the one a firmware 3.0.0 sensor sent.
  */
 #include "discovery/discovery.h"
 #include "legacy_vectors.h"
@@ -37,6 +38,19 @@ TEST(v110_response_has_m72_keys) {
                      R"("fw_hash":"f6c38c30","m72_ptp_state":"SLAVE"}})", info) == 0);
     CHECK(info.generation == AfiInterfaceGeneration::kV1_1);
     PASS("v110_response_has_m72_keys");
+}
+
+TEST(v120_response_has_if_version) {
+    AfiSensorInfo info;
+    CHECK(parse_json(R"({"return_code":0,"data":{"software_version":"3.2.0",)"
+                     R"("if_version":"1.2.0","m72_ptp_state":"SLAVE"}})", info) == 0);
+    CHECK(info.if_version == "1.2.0");
+    CHECK(info.generation == AfiInterfaceGeneration::kV1_2);
+    CHECK(info.vlan_id == 0);
+    CHECK(parse_json(R"({"return_code":0,"data":{"if_version":"1.2.0","vlan_id":4094}})",
+                     info) == 0);
+    CHECK(info.vlan_id == 4094);
+    PASS("v120_response_has_if_version");
 }
 
 TEST(generation_unknown_without_either_key) {

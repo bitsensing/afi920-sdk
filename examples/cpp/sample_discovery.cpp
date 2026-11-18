@@ -94,6 +94,7 @@ static void print_sensor(size_t idx, const afi::AfiSensorInfo& s) {
     printf("  MAC:            %s\n", s.mac_address.c_str());
     printf("  Subnet:         %s\n", s.subnet_mask.c_str());
     printf("  Gateway:        %s\n", s.gateway.c_str());
+    printf("  VLAN ID:        %u\n", static_cast<unsigned>(s.vlan_id));
     printf("  Range Mode:     %s (%d)\n", s.range_mode_name.c_str(),
            static_cast<int>(s.range_mode));
     printf("  Position Code:  %d\n", s.position_code);

@@ -71,6 +71,7 @@ def print_sensor(idx: int, s: dict):
           f"(bl={s.get('bootloader_hash', '?')} fw={s.get('fw_hash', '?')})")
     print(f"  HW Version:     {s.get('hw_version', '?')}")
     print(f"  MAC:            {s.get('mac_address', '?')}")
+    print(f"  VLAN ID:        {s.get('vlan_id', '?')}")
     print(f"  Range Mode:     {s.get('range_mode_name', RangeMode.name(mode))} ({mode})")
     print(f"  Position Code:  {s.get('position_code', '?')}")
     print(f"  Mounting:       ({s.get('offset_x_m', 0):.3f}, "

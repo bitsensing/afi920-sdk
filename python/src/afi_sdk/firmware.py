@@ -128,14 +128,21 @@ def upload_component(sdk: AfiSdk, update_type: str, component: str,
                      on_progress: Optional[ProgressCallback] = None) -> StepResult:
     """START, CHUNK until received_bytes == size, COMMIT, wait for idle.
 
-    Any failure after START aborts the session (0x0084) so the next attempt
-    starts clean.
+    Any failure after START, and a START that leaves the session in `error`,
+    aborts the session (0x0084) so the next attempt starts clean.
     """
     size = len(image)
     crc = image_crc32(image) if crc32 is None else crc32
     start = sdk.firmware_update_start(update_type, component, size, crc)
     if start is None:
-        return StepResult(component, False, f"START failed ({_sdk_error(sdk)})")
+        reason = f"START failed ({_sdk_error(sdk)})"
+        # A START the medium refuses leaves the session in `error`, which the
+        # stall timeout does not clear; every later START answers
+        # INVALID_STATE until an ABORT returns the session to `idle`.
+        st = sdk.firmware_update_status()
+        if st is not None and st.get("state") == "error":
+            sdk.firmware_update_abort()
+        return StepResult(component, False, reason)
     chunk_size = int(start.get("max_chunk_size") or DEFAULT_MAX_CHUNK_SIZE)
     target = start.get("target_slot")
 

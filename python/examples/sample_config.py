@@ -41,6 +41,7 @@ def main():
         print(f"  Hashes:     bl={info.get('bootloader_hash', '?')} "
               f"fw={info.get('fw_hash', '?')}")
         print(f"  MAC:        {info.get('mac_address', '?')}")
+        print(f"  VLAN ID:    {info.get('vlan_id', '?')}")
 
     status = sdk.get_sensor_status()
     if status:
@@ -87,7 +88,6 @@ def main():
 
     thresh = sdk.get_detection_threshold()
     if thresh:
-        print(f"  SNR level:  {thresh.get('snr_threshold_db', '?')}")
         print(f"  CFAR first:  {thresh.get('cfar_table_first_frame', '?')}")
         if "cfar_table_second_frame" in thresh:
             print(f"  CFAR second: {thresh['cfar_table_second_frame']}")

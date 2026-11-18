@@ -20,6 +20,8 @@ static constexpr size_t   kSomeipTpHeaderSize      = 4;
 static constexpr size_t   kSomeipTpChunkSize       = 1392;
 static constexpr uint8_t  kSomeipProtocolVersion   = 0x01;
 static constexpr uint8_t  kSomeipInterfaceVersion  = 0x01;
+// RDI header/chunk messages of interface v1.2.0; every other channel stays 0x01.
+static constexpr uint8_t  kSomeipInterfaceVersionRdi = 0x02;
 static constexpr uint8_t  kSomeipMsgTypeRequest    = 0x00;
 static constexpr uint8_t  kSomeipMsgTypeNotify     = 0x02;
 static constexpr uint8_t  kSomeipMsgTypeResponse   = 0x80;
@@ -30,24 +32,27 @@ static constexpr uint8_t  kSomeipReturnOk          = 0x00;
 // ─── Event IDs ───
 
 static constexpr uint16_t kEventCsii    = 0x8001;  // Host → Radar (UDP on v1.1.0, TCP on v1.0.x)
-static constexpr uint16_t kEventRdi     = 0x8002;
+static constexpr uint16_t kEventRdi     = 0x8002;  // v1.2.0: header A and header B
+static constexpr uint16_t kEventRdiChunkBase = 0x8100;  // v1.2.0: chunk k = base + k
+static constexpr uint16_t kRdiMaxChunks      = 76;      // k = 0..75 (0x8100~0x814B)
 static constexpr uint16_t kEventShii    = 0x8003;
 static constexpr uint16_t kEventSpi     = 0x8004;
 
-// ─── E2E header, 20B CRC-32 (RDI/SHII/SPI/CSII/Config API) ───
+// ─── E2E header, 20B CRC-32 (data streams and Config API) ───
 
 static constexpr size_t   kE2eHeaderSize = 20;
 
 // ─── Method IDs (Config API, interface v1.1.0 registry) ───
 
 enum class MethodId : uint16_t {
-    // Category 1: Device Info & Status (0x0010~0x0016)
+    // Category 1: Device Info & Status (0x0010~0x0017)
     kGetDeviceInfo         = 0x0010,
     kGetSensorStatus       = 0x0011,
     kGetDiagnosticInfo     = 0x0012,
     kRestart               = 0x0014,
     kResetAllSettings      = 0x0015,
     kGetCommandHistoryInfo = 0x0016,
+    kGetFaultLog           = 0x0017,
 
     // Category 2: Network Configuration (0x0020~0x0021)
     kGetNetworkConfig      = 0x0020,

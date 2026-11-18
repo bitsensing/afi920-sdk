@@ -58,6 +58,17 @@ public:
     uint64_t ForeignDrops() const { return foreign_drops_; }
 
     /**
+     * @brief Wake a thread blocked in Receive() without closing the socket
+     *
+     * Sends an empty datagram to the bound port over loopback; Receive()
+     * returns 0 for it. Closing the socket under a pending Winsock recvfrom()
+     * lets the cancelled receive write its status into the receiving thread's
+     * stack after recvfrom() has returned, so Stop() wakes, joins, then
+     * closes. A lost wake datagram costs one receive timeout.
+     */
+    void Wake();
+
+    /**
      * @brief Close the socket
      */
     void Close();

@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BUILD_EXAMPLES "Build example programs" ON)
 option(BUILD_TESTS    "Build test programs"    OFF)
 
+
 add_subdirectory(src)
 
 if(BUILD_EXAMPLES)

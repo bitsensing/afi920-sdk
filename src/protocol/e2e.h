@@ -2,13 +2,13 @@
  * @file e2e.h
  * @brief E2E communication protection header (20B, CRC-32) — receive and send
  *
- * RDI/SHII/SPI/CSII and the Config API carry a 20-byte E2E header right
- * after the SOME/IP header. All E2E fields are Big-endian, unlike the LE
- * ISO 23150 payload.
+ * The data streams and the Config API carry a 20-byte E2E header after the
+ * SOME/IP header, or after a stream's own header where it defines one. All
+ * E2E fields are Big-endian, unlike the LE ISO 23150 payload.
  *
  * Layout: CRC high (4B, 0) | CRC-32 (4B) | Length (4B) | Counter (4B) | Data ID (4B)
  * The IEEE 802.3 CRC-32 covers the body (Length bytes) only; the header is
- * not part of the protected region (interface v1.1.0, System Spec §7).
+ * not part of the protected region (interface v1.1.0, Interface Overview §3.2).
  *
  * Interface v1.0.x (firmware 3.0.0 to 3.1.0) keeps the field layout but puts
  * a CRC-64/XZ in the first 8 bytes, computed over Length, Counter, Data ID
@@ -65,9 +65,13 @@ int e2e_parse(const uint8_t* buf, size_t len, E2eHeader& out);
  * @param[out] out Parsed header fields (filled unless the frame is too short)
  * @param expected_data_id Expected Data ID, or 0 to skip this check
  * @param check_crc Recompute the CRC-32 (false checks structure only)
+ * @param allow_zero_crc Accept a zero CRC field on the Data ID and Length
+ *        checks alone (an exception to Interface Overview §3.2.5 for a
+ *        stream whose sender may leave the CRC out)
  */
 E2eStatus e2e_validate(const uint8_t* buf, size_t len, E2eHeader& out,
-                       uint32_t expected_data_id = 0, bool check_crc = true);
+                       uint32_t expected_data_id = 0, bool check_crc = true,
+                       bool allow_zero_crc = false);
 
 /// CRC-64/XZ (reflected 0x42F0E1EBA9EA3693, init and xorout all ones), the
 /// interface v1.0.x E2E CRC. KAT: "123456789" -> 0x995DC9BBDF1939FA.

@@ -90,6 +90,7 @@ TEST(method_ids_match_v110_registry) {
     CHECK(static_cast<uint16_t>(MethodId::kRestart) == 0x0014);
     CHECK(static_cast<uint16_t>(MethodId::kResetAllSettings) == 0x0015);
     CHECK(static_cast<uint16_t>(MethodId::kGetCommandHistoryInfo) == 0x0016);
+    CHECK(static_cast<uint16_t>(MethodId::kGetFaultLog) == 0x0017);
 
     CHECK(static_cast<uint16_t>(MethodId::kGetNetworkConfig) == 0x0020);
     CHECK(static_cast<uint16_t>(MethodId::kSetNetworkConfig) == 0x0021);

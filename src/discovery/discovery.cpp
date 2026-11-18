@@ -1,6 +1,7 @@
 // Copyright (c) 2026 bitsensing Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause
 #include "discovery/discovery.h"
+#include "protocol/interface_version.h"
 #include "protocol/someip.h"
 #include "transport/platform.h"
 #include "util/endian_util.h"
@@ -174,6 +175,7 @@ int Discovery::ParseResponse(const uint8_t* data, size_t len, AfiSensorInfo& out
         if (d.contains("ip_address"))     out.ip = d["ip_address"].get<std::string>();
         if (d.contains("subnet_mask"))    out.subnet_mask = d["subnet_mask"].get<std::string>();
         if (d.contains("gateway"))        out.gateway = d["gateway"].get<std::string>();
+        if (d.contains("vlan_id"))        out.vlan_id = d["vlan_id"].get<uint16_t>();
 
         // Ports
         if (d.contains("api_port"))           out.port = d["api_port"].get<uint16_t>();
@@ -222,9 +224,13 @@ int Discovery::ParseResponse(const uint8_t* data, size_t len, AfiSensorInfo& out
         if (d.contains("ptp_state"))      out.ptp_state = d["ptp_state"].get<std::string>();
         if (d.contains("ptp_offset_ns"))  out.ptp_offset_ns = d["ptp_offset_ns"].get<int64_t>();
 
-        // driver_hash exists only on interface v1.0.x, the m72_* keys only on v1.1.0.
+        // if_version exists from interface v1.2.0 on; before it driver_hash
+        // exists only on v1.0.x and the m72_* keys only on v1.1.0.
         out.generation = AfiInterfaceGeneration::kUnknown;
-        if (d.contains("driver_hash")) {
+        if (d.contains("if_version") && d["if_version"].is_string()) {
+            out.if_version = d["if_version"].get<std::string>();
+            out.generation = GenerationFromIfVersion(out.if_version);
+        } else if (d.contains("driver_hash")) {
             out.generation = AfiInterfaceGeneration::kV1_0;
         } else {
             for (const auto& item : d.items()) {

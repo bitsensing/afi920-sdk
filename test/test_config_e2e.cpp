@@ -3,8 +3,8 @@
  * @brief Config API request/response E2E framing over a loopback TCP peer
  *
  * Request and response both carry the 20B E2E header after the SOME/IP
- * header; Data ID is 0x6000 << 16 | Method ID (Config API Overview §1,
- * 10_E2E_Protection.md §8.2). A failed response check is a warning only.
+ * header; Data ID is 0x6000 << 16 | Method ID (Config API Overview §2.1,
+ * Interface Overview §3.2.4). A failed response check is a warning only.
  */
 #include "config_api/config_client.h"
 #include "protocol/e2e.h"

@@ -47,7 +47,6 @@ static const char* shi_defect_str(bts_shi_sensor_defect_recognised_t d) {
     switch (d) {
         case BTS_SHI_SDR_FULLY_FUNCTIONAL:     return "Fully Functional";
         case BTS_SHI_SDR_NOT_FULLY_FUNCTIONAL:  return "Not Fully Functional";
-        case BTS_SHI_SDR_OUT_OF_ORDER:          return "Out of Order";
         default:                                return "Unknown";
     }
 }

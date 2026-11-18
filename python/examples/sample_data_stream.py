@@ -5,9 +5,10 @@ Supports TCP (default) and UDP transport modes.
 TCP: connects to sensor and reads SOME/IP framed messages.
 UDP: listens on local ports for SOME/IP-TP segmented events.
 
-Interface v1.1.0: every stream payload carries a 20B E2E header
-(CRC-32 over the body) ahead of the ISO 23150 payload — parsing lives in
-afi_sdk.streams.
+Every stream payload carries a 20B E2E header ahead of the ISO 23150
+payload; parsing lives in afi_sdk.streams. RDI goes through
+RdiStreamDecoder, which reads the single-message format of interface v1.0.x
+and v1.1.0 and the header/chunk messages of v1.2.0.
 
 The transport is the sensor's own stream setting (it changes only through
 the diagnostic access mode and a restart); the optional argument only
@@ -34,7 +35,7 @@ from afi_sdk.streams import (
     E2E_HEADER_SIZE, E2E_DATA_ID_RDI, E2E_DATA_ID_SHII,
     E2E_DATA_ID_SPI,
     RDI_MAX_PAYLOAD_SIZE,
-    SomeipTpReassembler, strip_e2e,
+    SomeipTpReassembler, strip_e2e, RdiStreamDecoder,
     parse_rdi_frame, parse_rdi_detection,
 )
 
@@ -76,6 +77,9 @@ class StreamReceiver:
                     if event_id in tp_limits else None)
         self._max_frame_size = SOMEIP_HEADER_SIZE + tp_limits.get(event_id, 64 * 1024)
         self._first_frame = None
+        # RDI: whole SOME/IP messages in, one payload per scan out.
+        self._rdi = RdiStreamDecoder() if event_id == EVENT_RDI else None
+        self.partial_scans = 0
 
     def start(self):
         self._running = True
@@ -88,6 +92,17 @@ class StreamReceiver:
             self._thread.join(timeout=3.0)
         if self._sock:
             self._sock.close()
+
+    def _deliver_scans(self, scans: list):
+        """Record RDI scans from RdiStreamDecoder."""
+        for scan in scans:
+            self.frames += 1
+            if not scan["e2e_valid"]:
+                self.e2e_errors += 1
+            if not scan["complete"]:
+                self.partial_scans += 1
+            if not self._first_frame:
+                self._first_frame = scan["payload"]
 
     def _deliver(self, frame: bytes):
         """Strip/verify E2E and record the ISO payload."""
@@ -144,6 +159,9 @@ class StreamReceiver:
 
                 if len(data) < SOMEIP_HEADER_SIZE:
                     continue
+                if self._rdi:
+                    self._deliver_scans(self._rdi.feed(data) + self._rdi.poll())
+                    continue
 
                 h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
                 if (h[0] != SERVICE_ID or h[1] != self.event_id
@@ -171,6 +189,8 @@ class StreamReceiver:
             try:
                 data, addr = self._sock.recvfrom(2048)
             except socket.timeout:
+                if self._rdi:
+                    self._deliver_scans(self._rdi.poll())
                 continue
             except OSError:
                 break
@@ -180,6 +200,9 @@ class StreamReceiver:
 
             self.packets += 1
             self.bytes_recv += len(data)
+            if self._rdi:
+                self._deliver_scans(self._rdi.feed(data) + self._rdi.poll())
+                continue
 
             h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
             if (h[0] != SERVICE_ID or h[1] != self.event_id
@@ -284,6 +307,7 @@ def main():
             print(f"  Version:    {hdr['version']}")
             print(f"  Sensor ID:  {hdr['sensor_id']}")
             print(f"  Detections: {hdr['num_detections']}")
+            print(f"  Partial scans: {rdi.partial_scans}")
             print(f"  Counter:    {hdr['message_counter']}")
 
             if hdr["num_detections"] > 0:

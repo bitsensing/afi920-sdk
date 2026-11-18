@@ -31,7 +31,6 @@ class FakeClient:
     def __init__(self):
         self.calls = []
         self.detection_response = {
-            "snr_threshold_db": 5,
             "cfar_table_first_frame": [5] * 19,
         }
 
@@ -99,36 +98,35 @@ def test_stream_destination_keys_match_v110():
 
 def test_detection_level_validation():
     sdk = make_sdk()
-    assert sdk.set_detection_threshold(snr_db=5) == OK
+    assert sdk.set_detection_threshold(cfar_table_first_frame=[9] * 19) == OK
     assert sdk._client.calls[-1] == (
-        METHOD_SET_DETECTION_THRESHOLD, {"snr_threshold_db": 5})
+        METHOD_SET_DETECTION_THRESHOLD, {"cfar_table_first_frame": [9] * 19})
     call_count = len(sdk._client.calls)
-    for invalid in (0, 10, 0.5, 9.01, True, math.nan, math.inf):
-        assert sdk.set_detection_threshold(snr_db=invalid) == INVALID_PARAM
+    for invalid in ([0] * 19, [10] * 19, [5] * 18, [5.5] * 19, [True] * 19,
+                    [math.nan] * 19):
+        assert sdk.set_detection_threshold(
+            cfar_table_first_frame=invalid) == INVALID_PARAM
+    assert sdk.set_detection_threshold(
+        cfar_table_second_frame=[0] * 19) == INVALID_PARAM
     assert len(sdk._client.calls) == call_count
-    assert sdk.set_detection_threshold(snr_db=5.5) == OK
-    assert sdk._client.calls[-1] == (
-        METHOD_SET_DETECTION_THRESHOLD, {"snr_threshold_db": 5.5})
 
 
 def test_detection_response_validation():
     sdk = make_sdk()
     assert sdk.get_detection_threshold() == {
-        "snr_threshold_db": 5,
         "cfar_table_first_frame": [5] * 19,
     }
     sdk._client.detection_response = {
-        "snr_threshold_db": 5.5,
         "cfar_table_first_frame": [5] * 19,
+        "cfar_table_second_frame": [7] * 19,
     }
-    assert sdk.get_detection_threshold()["snr_threshold_db"] == 5.5
+    assert sdk.get_detection_threshold()["cfar_table_second_frame"] == [7] * 19
     sdk._client.detection_response = {
-        "snr_threshold_db": 9.5,
         "cfar_table_first_frame": [5] * 19,
+        "cfar_table_second_frame": [10] * 19,
     }
     assert sdk.get_detection_threshold() is None
     sdk._client.detection_response = {
-        "snr_threshold_db": 5,
         "cfar_table_first_frame": [5] * 18,
     }
     assert sdk.get_detection_threshold() is None
@@ -176,6 +174,8 @@ def test_set_mode_reports_radar_refusals():
     assert sdk.set_mode(AccessMode.PROGRAMMING) == SESSION_REQUIRED
     assert sdk.set_mode(AccessMode.DIAGNOSTIC) == OK
     assert sdk.set_mode(AccessMode.DIAGNOSTIC) == ACCESS_DENIED
+
+
 
 
 def test_config_client_e2e_loopback():

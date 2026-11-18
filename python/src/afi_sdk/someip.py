@@ -50,6 +50,7 @@ METHOD_GET_DIAGNOSTIC_INFO      = 0x0012
 METHOD_RESTART                  = 0x0014
 METHOD_RESET_ALL_SETTINGS       = 0x0015
 METHOD_GET_COMMAND_HISTORY      = 0x0016
+METHOD_GET_FAULT_LOG            = 0x0017
 
 # Network (0x002x) — unified radar network + stream destinations
 METHOD_GET_NETWORK_CONFIG       = 0x0020
@@ -108,7 +109,10 @@ METHOD_DISCOVERY_RESPONSE       = 0x00C1
 # ── Data Stream Event IDs ──
 
 EVENT_CSII     = 0x8001   # Host -> Radar (UDP on v1.1.0, TCP on v1.0.x)
-EVENT_RDI      = 0x8002
+EVENT_RDI      = 0x8002   # v1.2.0: RDI header A and header B
+EVENT_RDI_CHUNK_BASE = 0x8100   # v1.2.0: RDI chunk k = base + k (k = 0..75)
+RDI_MAX_CHUNKS = 76
+IFACE_VER_RDI = 0x02      # SOME/IP Interface Version of v1.2.0 RDI messages
 EVENT_SHII     = 0x8003
 EVENT_SPI      = 0x8004
 
@@ -129,7 +133,7 @@ MAX_RESPONSE_PAYLOAD   = 4 * 1024 * 1024  # 4 MB
 # without a reply when the SOME/IP Length is below 28 or above 28 + this.
 MAX_REQUEST_BODY       = 16384
 
-# ── Return codes (System Spec §6) ──
+# ── Return codes (Interface Overview §4) ──
 # The radar sends the same code in the SOME/IP header and in the JSON body.
 
 RC_SUCCESS                 = 0x00
@@ -165,12 +169,32 @@ ERR_PROTOCOL  = -3   # response header or body does not belong to the request
 ERR_TOO_LARGE = -4   # request body above MAX_REQUEST_BODY; nothing was sent
 
 # Interface generation a sensor speaks (same values as C++
-# afi::AfiInterfaceGeneration). RDI, SHII and SPI are received from both and
-# CSII is sent to both; the Config API is v1.1.0 only. Compatibility with
-# v1.0.x is limited to this SDK release.
+# afi::AfiInterfaceGeneration). RDI, SHII and SPI are received from every
+# generation and CSII is sent to each; the Config API is v1.1.0 and later.
+# RDI is one message per scan on v1.0.x and v1.1.0 and header/chunk messages
+# on v1.2.0 (streams.RdiStreamDecoder reads both).
 INTERFACE_GEN_UNKNOWN = 0
 INTERFACE_GEN_V1_0 = 1   # interface v1.0.x, firmware 3.0.0 to 3.1.0
 INTERFACE_GEN_V1_1 = 2   # interface v1.1.0, firmware 3.1.1
+INTERFACE_GEN_V1_2 = 3   # interface v1.2.x (if_version key)
+
+
+def generation_from_if_version(if_version: str) -> int:
+    """INTERFACE_GEN_* for an ``if_version`` value such as "1.2.0". The key
+    exists from interface v1.2.0 on, so a value that does not parse is still
+    at least INTERFACE_GEN_V1_2."""
+    if not if_version:
+        return INTERFACE_GEN_UNKNOWN
+    parts = if_version.split(".")
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        return INTERFACE_GEN_V1_2
+    if major == 1 and minor == 0:
+        return INTERFACE_GEN_V1_0
+    if major == 1 and minor == 1:
+        return INTERFACE_GEN_V1_1
+    return INTERFACE_GEN_V1_2
 
 TRANSPORT_ERROR_NAMES = {ERR_TRANSPORT: "TRANSPORT", ERR_TIMEOUT: "TIMEOUT",
                          ERR_PROTOCOL: "PROTOCOL", ERR_TOO_LARGE: "TOO_LARGE"}
@@ -195,7 +219,7 @@ class ConfigClient:
 
     Every request and response carries the 20B E2E header. A response whose
     E2E check fails is logged and still returned; ``last_response_e2e["ok"]``
-    holds the verdict (System Spec §7.5).
+    holds the verdict (Interface Overview §3.2.5).
 
     Any transport or framing failure drops the connection: a late response
     left in the socket would otherwise be read as the answer to the next
@@ -277,7 +301,16 @@ class ConfigClient:
                          "RC_NOT_SUPPORTED without sending", self.host, self.port)
             self._drop()
             return True
+        # GetDeviceInfo carries if_version from interface v1.2.0 on.
         self.interface_generation = INTERFACE_GEN_V1_1
+        try:
+            body = out[1][E2E_HEADER_SIZE:]
+            data = json.loads(body.decode("utf-8")).get("data", {})
+            gen = generation_from_if_version(data.get("if_version", ""))
+            if gen != INTERFACE_GEN_UNKNOWN:
+                self.interface_generation = gen
+        except (ValueError, AttributeError):
+            pass
         return True
 
     def close(self):
@@ -444,8 +477,11 @@ class ConfigClient:
 
 
 def discovery_generation(info: dict) -> int:
-    """Interface generation from Discovery keys: driver_hash exists only on
-    v1.0.x, the m72_* keys only on v1.1.0 (INTERFACE_GEN_*)."""
+    """Interface generation from Discovery keys (INTERFACE_GEN_*): if_version
+    exists from v1.2.0 on; before it driver_hash exists only on v1.0.x and
+    the m72_* keys only on v1.1.0."""
+    if isinstance(info.get("if_version"), str):
+        return generation_from_if_version(info["if_version"])
     if "driver_hash" in info:
         return INTERFACE_GEN_V1_0
     if any(k.startswith("m72_") for k in info):

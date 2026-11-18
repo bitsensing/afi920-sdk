@@ -4,7 +4,7 @@
  *
  * Variable-length payload: operation modes, input signals, and calibration
  * components are serialized as N elements driven by their num_valid_* count.
- * Authoritative spec: docs/04_Data_Stream/04_SHII_Health_Info.md
+ * Authoritative spec: docs/02_SHII_Health_Info.md
  */
 
 #ifndef BTS_ISO23150_SHI_H
@@ -45,29 +45,24 @@ typedef enum {
     BTS_SHI_SOM_NORMAL_ULTRA_SHORT_RANGE= 5,
     BTS_SHI_SOM_NORMAL_ULTRA_DUAL_RANGE = 6,
     BTS_SHI_SOM_DEGRADATION_MODE        = 10,
-    BTS_SHI_SOM_EVALUATION_MODE         = 50,
-    BTS_SHI_SOM_CALIBRATION_MODE        = 100,
+    BTS_SHI_SOM_DIAGNOSTIC_MODE         = 20,
+    BTS_SHI_SOM_PROGRAMMING_MODE        = 21,
+    BTS_SHI_SOM_FAULT_MODE              = 100,
     BTS_SHI_SOM_INITIALISING            = 200,
-    BTS_SHI_SOM_TEST_MODE               = 201,
 } bts_shi_sensor_operation_mode_t;
 
 typedef enum {
     BTS_SHI_SDR_FULLY_FUNCTIONAL        = 0,
     BTS_SHI_SDR_NOT_FULLY_FUNCTIONAL    = 1,
-    BTS_SHI_SDR_OUT_OF_ORDER            = 2,
 } bts_shi_sensor_defect_recognised_t;
 
 typedef enum {
     BTS_SHI_SDR_NO_DEFECT               = 0,
-    BTS_SHI_SDR_INTERNAL_MEMORY_ERROR   = 1,
+    BTS_SHI_SDR_SUPPLY_VOLTAGE_FAULT    = 1,
     BTS_SHI_SDR_HW_DEFECT               = 2,
     BTS_SHI_SDR_THERMAL_DEFECT          = 3,
-    BTS_SHI_SDR_COMMUNICATION_ERROR     = 4,
     BTS_SHI_SDR_CALIBRATION_ERROR       = 5,
-    BTS_SHI_SDR_CONFIGURATION_ERROR     = 6,
     BTS_SHI_SDR_MECHANICAL_DEFECT       = 7,
-    BTS_SHI_SDR_SOFTWARE_DEFECT         = 8,
-    BTS_SHI_SDR_COMPUTING_POWER         = 9,
     BTS_SHI_SDR_OUT_OF_TIME_SYNC        = 10,
     BTS_SHI_SDR_EXTERNALLY_DISTURBED    = 11,
 } bts_shi_sensor_defect_reason_t;
@@ -123,12 +118,10 @@ typedef enum {
 } bts_shi_sensor_calibration_status_t;
 
 typedef enum {
-    BTS_SHI_CPS_INITIAL_CAL_PERFORMED       = 0,
-    BTS_SHI_CPS_INITIAL_CAL_NOT_PERFORMED   = 1,
-    BTS_SHI_CPS_INITIAL_CAL_FAILED          = 2,
-    BTS_SHI_CPS_RECAL_NEEDED_INTRINSIC      = 3,
-    BTS_SHI_CPS_RECAL_NEEDED_EXTRINSIC      = 4,
-    BTS_SHI_CPS_RECAL_NEEDED_FULL           = 5,
+    BTS_SHI_SCST_COMPLETED              = 0,
+    BTS_SHI_SCST_NOT_PERFORMED          = 1,
+    BTS_SHI_SCST_IN_PROGRESS            = 2,
+    BTS_SHI_SCST_FAILED                 = 3,
 } bts_shi_sensor_calibration_state_t;
 
 /*============================================================================
@@ -194,7 +187,7 @@ void bts_shi_set_input_signal_statuses(bts_shi_message_t* msg,
                                        uint8_t count);
 
 /**
- * @brief Set time sync status (offset value field removed in this revision)
+ * @brief Set time sync status
  */
 void bts_shi_set_time_sync(bts_shi_message_t* msg,
                            bts_shi_sensor_time_sync_t sync_status);

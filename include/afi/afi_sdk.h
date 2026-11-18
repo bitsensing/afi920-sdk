@@ -3,7 +3,7 @@
  * @brief AFI920 4D Imaging Radar SDK
  *
  * Main facade class for interacting with AFI920 sensors.
- * Provides data streaming (RDI/SHII/SPI), sensor discovery,
+ * Provides data streaming, sensor discovery,
  * and configuration API.
  *
  * Usage:
@@ -115,11 +115,12 @@ public:
     /// Replaces the plain SPI callback when both are registered.
     void RegRecvCallback(std::function<void(const AfiSpiMessage&, const AfiStreamMeta&)> cb);
 
+
     /**
      * @brief Register the RDI send-slot loss callback
      *
      * Loss is counted from gaps in the RDI E2E Counter, which advances once
-     * per send slot (System Spec §8.2). MessageCounter repeats on DQ 6
+     * per send slot (Interface Overview §3.2.3). MessageCounter repeats on DQ 6
      * resends and is not used. A counter decrease (radar restart) starts a
      * new baseline. Only frames whose E2E check passed advance the count
      * (the Counter is outside the CRC); with validate_e2e off every frame
@@ -133,8 +134,8 @@ public:
     /**
      * @brief Register a parser-independent wire-payload callback.
      *
-     * The callback receives reassembled RDI, SHII, and SPI payloads
-     * before their version-specific parsers run. E2E is verified but
+     * The callback receives every reassembled stream payload before its
+     * version-specific parser runs. E2E is verified but
      * never used to drop a frame (unless e2e_strict is set); the result is in
      * AfiWirePayloadFrame::e2e_valid. TCP receive sizing and TP reassembly
      * are domain-schema-independent up to the SDK's generic 64 MiB per-frame
@@ -218,7 +219,7 @@ public:
      * @brief Enter the next access mode (SetMode 0x00E1)
      *
      * Diagnostic is accepted from Normal, Programming only from Diagnostic.
-     * Entering Programming halts RDI/SHII/SPI, and only a reboot
+     * Entering Programming halts the data streams, and only a reboot
      * returns to Normal. Re-entry or a reverse step answers kAccessDenied;
      * Programming requested from Normal answers kSessionRequired.
      */
@@ -233,6 +234,7 @@ public:
      */
     int EnterMode(AfiAccessMode target);
 
+
     // ─── Config API: Device Info & Status (0x001x) ───
 
     int GetDeviceInfo(AfiDeviceInfo& out);
@@ -241,6 +243,16 @@ public:
     int Restart();
     int ResetAllSettings();
     int GetCommandHistoryInfo(AfiCommandHistory& out);
+    /**
+     * @brief Read count raw slots (1 to kAfiFaultLogPageMax) of a fault log
+     *        ring from slot on (GetFaultLog 0x0017)
+     *
+     * The page stops at the last slot of the ring. kBusy means a flash job
+     * was in progress; retry. kSensorError with INTERNAL_ERROR in
+     * GetLastSensorResult() means the log is off this boot.
+     */
+    int GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count,
+                    AfiFaultLogPage& out);
 
     // ─── Config API: Network (0x002x) ───
 

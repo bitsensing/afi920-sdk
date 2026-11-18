@@ -84,7 +84,7 @@ public:
      * (Data ID 0x6000 << 16 | method_id, CRC-32 over the body), sends the
      * frame, receives the response, and strips the response E2E header.
      * A failed response E2E check is logged as a warning and the body is
-     * still returned (System Spec §7.5); LastResponseE2eOk() holds the verdict.
+     * still returned (Interface Overview §3.2.5); LastResponseE2eOk() holds the verdict.
      *
      * Any transport or framing failure closes the connection, because a late
      * response left in the socket would be read as the next request's answer.
