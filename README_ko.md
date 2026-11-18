@@ -9,7 +9,7 @@
 bitsensing **AFI920 4D Imaging Radar**용 C++ 및 Python SDK이다.  
 센서 탐색, RDI/SHII/SPI 데이터 수신, CSII 차량 정보 송신, 접근 모드를 포함한 Config API, 펌웨어 업데이트를 제공한다.
 
-> **Version 2.2.0**은 AFI920 인터페이스 v1.1.0(펌웨어 v3.1.1)을 기준으로 하며, 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)의 데이터도 수신한다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에서 확인한다.
+> **Version 2.2.0**은 AFI920 인터페이스 v1.2.0을 기준으로 하며, 인터페이스 v1.1.0(펌웨어 v3.1.1)과 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터도 수신한다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에서 확인한다.
 
 > **bitsensing** [bitsensing.com](https://bitsensing.com)
 
@@ -20,7 +20,7 @@ bitsensing **AFI920 4D Imaging Radar**용 C++ 및 Python SDK이다.
 - AFI920 고객 통합을 위한 C++ 및 Python 공개 SDK 저장소이다.
 - 센서 탐색, 데이터 수신, 센서 설정, 펌웨어 업데이트의 빠른 시작 절차는 이 README에서 확인한다.
 - 제품 매뉴얼, 인터페이스 명세, 설치 및 운영 상세 가이드는 별도 제공 문서에서 확인한다.
-- 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)는 이번 릴리스에 한해 데이터만 지원한다. 세부 범위는 [Firmware Compatibility](#firmware-compatibility)에서 확인한다.
+- 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)는 데이터만 지원한다. 인터페이스 v1.2.0 센서는 RDI 헤더·묶음 메시지를 포함하여 지원한다. 세부 범위는 [Firmware Compatibility](#firmware-compatibility)에서 확인한다.
 - `third_party/afi920_interface/src/c`의 프로토콜 인터페이스 헤더는 인터페이스 v1.1.0을 vendoring한 사본이다.
 
 ---
@@ -283,25 +283,28 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 
 > **참고** 기본 데이터 스트림 전송 방식은 TCP이며, 호스트가 센서의 스트림 포트로 접속한다. UDP에서는 호스트가 스트림 포트를 bind하고, 송신 주소가 `sensor_ip`인 datagram만 수신한다. `stream_transport`로 전체 기본값을 지정하고, `rdi_transport`, `shi_transport`, `spi_transport`로 스트림별 값을 덮어쓴다. 이 값은 센서에 설정된 송신 프로토콜(`GetNetworkConfig`)과 일치해야 한다. CSII는 인터페이스 v1.1.0에서 UDP, v1.0.x에서 TCP를 사용한다. SDK는 센서의 인터페이스 세대로 CSII 전송 방식을 정하며, `csii_transport`로 이 선택을 덮어쓴다.
 
-> **E2E Protection** RDI/SHII/SPI/CSII 메시지와 Config API 요청·응답은 모두 20바이트 E2E 헤더(CRC 상위 0, CRC-32, Length, Counter, Data ID, Big-endian)를 포함한다. CRC는 본문만 보호하며, CRC 필드가 0인 메시지는 통과로 판정하지 않는다. 인터페이스는 검증 실패 메시지의 처분을 호스트에 맡긴다(System Spec §7.5). SDK는 기본 설정에서 경고 로그를 기록하고, 프레임을 판정 결과와 함께 전달한다. 판정 결과는 `AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`의 `e2e_counter`, `e2e_checked`, `e2e_valid`에 담긴다. `validate_e2e`는 데이터 스트림 검증의 사용 여부를 정하며, `e2e_strict = true`이면 검증 실패 프레임을 폐기한다. 검증에 실패한 Config API 응답도 호출자에게 반환하며, 그 판정 결과는 `GetLastSensorResult().e2e_ok`에서 확인한다. 인터페이스 v1.0.x 센서는 앞 8바이트에 Length, Counter, Data ID, 본문에 대한 CRC-64/XZ를 둔다. SDK는 수신 시 이 CRC를 허용하며, 송신 측 세대를 `generation`으로 알린다.
+> **E2E Protection** RDI/SHII/SPI/CSII 메시지와 Config API 요청·응답은 모두 20바이트 E2E 헤더(CRC 상위 0, CRC-32, Length, Counter, Data ID, Big-endian)를 포함한다. CRC는 본문만 보호하며, CRC 필드가 0인 메시지는 통과로 판정하지 않는다. 인터페이스는 검증 실패 메시지의 처분을 호스트에 맡긴다(Interface Overview §3.2.5). SDK는 기본 설정에서 경고 로그를 기록하고, 프레임을 판정 결과와 함께 전달한다. 판정 결과는 `AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`의 `e2e_counter`, `e2e_checked`, `e2e_valid`에 담긴다. `validate_e2e`는 데이터 스트림 검증의 사용 여부를 정하며, `e2e_strict = true`이면 검증 실패 프레임을 폐기한다. 검증에 실패한 Config API 응답도 호출자에게 반환하며, 그 판정 결과는 `GetLastSensorResult().e2e_ok`에서 확인한다. 인터페이스 v1.0.x 센서는 앞 8바이트에 Length, Counter, Data ID, 본문에 대한 CRC-64/XZ를 둔다. SDK는 수신 시 이 CRC를 허용하며, 송신 측 세대를 `generation`으로 알린다.
 
 ---
 
 ## Firmware Compatibility
 
-이번 SDK 릴리스는 인터페이스 v1.1.0(펌웨어 3.1.1) 센서와 함께 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0에서만 동작한다. v1.0.x 지원은 이번 릴리스로 종료하며, 해당 센서는 bitsensing이 펌웨어 3.1.1로 이전한다.
+SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v1.2.0 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0 이후에서 동작한다.
 
-| 기능 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
-|------|------------------------------|-------------------------------------|
-| Discovery | 지원 | 지원 |
-| RDI, SHII, SPI 수신 | 지원 | 지원 (E2E CRC-64/XZ 허용) |
-| CSII | UDP 30501 | TCP 30501 |
-| Config API | 지원 | `kNotSupported` / `NOT_SUPPORTED`, 송신하지 않음 |
-| 펌웨어 업데이트 | 지원 | `kNotSupported` / `NOT_SUPPORTED`, 송신하지 않음 |
+| 기능 | 인터페이스 v1.2.0 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
+|------|-------------------|------------------------------|-------------------------------------|
+| Discovery | 지원 (`if_version`) | 지원 | 지원 |
+| RDI 수신 | 헤더·묶음 메시지, 스캔마다 `AfiRdiFrame` 1개 | 스캔마다 메시지 1개 | 스캔마다 메시지 1개 |
+| SHII, SPI 수신 | 지원 | 지원 | 지원 (E2E CRC-64/XZ 허용) |
+| CSII | UDP 30501 | UDP 30501 | TCP 30501 |
+| Config API | 지원 | 지원 | `kNotSupported` / `NOT_SUPPORTED`, 송신하지 않음 |
+| 펌웨어 업데이트 | 지원 | 지원 | `kNotSupported` / `NOT_SUPPORTED`, 송신하지 않음 |
 
-SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요청으로 세대를 판정한다. Config API를 끈 구성에서는 E2E 검증을 통과한 스트림 프레임으로 판정한다. 판정 결과는 `GetInterfaceGeneration()`(C++)과 `interface_generation`(Python)에서 확인한다. Discovery는 센서별 세대를 `AfiSensorInfo::generation`과 Python `_interface_generation` 키로 보고한다. v1.0.x 센서에서는 이 요청 직후 Config API 연결을 닫고, 이후의 Config API 호출을 송신하지 않고 반환한다. v1.0.x 센서는 해석하지 못한 v1.1.0 요청 가운데 Restart, ResetAllSettings 같은 일부 요청을 실행하기 때문이다.
+인터페이스 v1.2.0은 RDI 스캔 하나를 헤더 A, 묶음 메시지, 헤더 B로 나누어 송신한다(SOME/IP Interface Version 0x02, Event `0x8002`와 `0x8100`~`0x814B`, Event마다 별도 E2E Data ID). SDK는 E2E Counter를 기준으로 이 메시지를 스캔 하나의 `AfiRdiFrame`으로 조립한다(Interface Overview §3.2.3). 따라서 RDI 콜백은 모든 세대에서 같은 형식의 프레임을 받는다. 묶음이 빠진 스캔은 도착한 검출만으로 전달하며, `chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`가 그 상태를 표시한다. 헤더 메시지를 하나도 받지 못한 스캔은 폐기한다. payload 콜백은 모든 메시지를 `event_id`, `someip_interface_version`과 함께 받는다. Python 수신부는 `streams.RdiStreamDecoder`를 사용하며, 이 클래스는 스캔마다 `parse_rdi_frame`으로 해석하는 단일 메시지 형식 RDI payload를 반환한다.
 
-스트림 layout은 두 세대에서 같다. SDK는 모든 값을 변환하지 않고 전달하며, 아래 필드는 v1.0.x에서 의미가 다르다. 두 세대는 payload Common Header의 인터페이스 버전(`1.0.0` 또는 `1.1.0`)으로 구분한다.
+SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요청으로 세대를 판정한다. 응답의 `if_version` 키는 v1.2.0 이후 세대를 표시한다. Config API를 끈 구성에서는 E2E 검증을 통과한 스트림 프레임으로 판정한다. 판정 결과는 `GetInterfaceGeneration()`(C++)과 `interface_generation`(Python)에서 확인한다. Discovery는 센서별 세대를 `AfiSensorInfo::generation`과 Python `_interface_generation` 키로 보고한다. v1.0.x 센서에서는 이 요청 직후 Config API 연결을 닫고, 이후의 Config API 호출을 송신하지 않고 반환한다. v1.0.x 센서는 해석하지 못한 v1.1.0 요청 가운데 Restart, ResetAllSettings 같은 일부 요청을 실행하기 때문이다.
+
+스트림 layout은 두 세대에서 같다. SDK는 모든 값을 변환하지 않고 전달하며, 아래 필드는 v1.0.x에서 의미가 다르다. 두 세대는 payload ISO23150 Header의 인터페이스 버전(`1.0.0` 또는 `1.1.0`)으로 구분한다.
 
 | 필드 | 인터페이스 v1.0.x | 인터페이스 v1.1.0 |
 |------|-------------------|-------------------|
@@ -312,7 +315,7 @@ SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요�
 | RDI 반경 속도 영역 | ±50 m/s(FW 3.0.0) | −111.11 m/s부터 |
 | SHII 센서 운영 모드 | `150`(v1.0.x 시험 모드)이 나타날 수 있음 | `6`(UDR)이 나타날 수 있음 |
 | SHII 입력 신호 상태 | 1개 | 4개 |
-| E2E Counter | 스트림별, TCP 연결마다 1부터 증가 | RDI, SHII, SPI가 공유하는 송신 슬롯 |
+| E2E Counter | 스트림별, TCP 연결마다 1부터 증가 | RDI, SHII, SPI가 공유하는 송신 주기 |
 
 ---
 
@@ -529,7 +532,7 @@ python test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>  
 | `AfiVehicleInput` | `SendVehicleInput`(CSII)으로 센서에 송신하는 차량 동역학 정보, `sensor_id` 기본값 1 |
 | `AfiModeStatus` | 접근 모드, 현재 모드 유지 시간, 데이터 스트림 정지 여부 |
 | `AfiSensorResult` | 마지막 Config API 호출에 대한 레이더 처리 결과 |
-| `AfiInterfaceGeneration` | 센서 또는 프레임의 인터페이스 세대: `kUnknown`, `kV1_0`, `kV1_1` |
+| `AfiInterfaceGeneration` | 센서 또는 프레임의 인터페이스 세대: `kUnknown`, `kV1_0`, `kV1_1`, `kV1_2` |
 
 ### `bts_rdi_detection_t` 주요 필드
 
@@ -568,7 +571,7 @@ AfiSdk
 
 - 각 `AfiSdk` 인스턴스는 독립적으로 동작한다. 다중 센서 운용 시 센서마다 인스턴스를 하나씩 생성한다.
 - 데이터 콜백은 내부 수신 스레드에서 호출되므로, 콜백 처리는 블로킹 없이 유지하거나 별도 처리 스레드로 넘긴다.
-- RDI 손실 콜백은 E2E 검증을 통과한 프레임의 E2E Counter 결번으로 손실 송신 슬롯을 집계한다.
+- RDI 손실 콜백은 E2E 검증을 통과한 프레임의 E2E Counter 결번으로 손실 송신 주기을 집계한다.
 - TCP 데이터 스트림은 연결이 끊기면 1초에서 최대 30초까지 늘어나는 간격으로 재연결한다.
 - `SendVehicleInput()`은 호출자 스레드에서 실행되며, 첫 호출 시 CSII 소켓을 생성한다. 인터페이스 v1.1.0에는 UDP, v1.0.x에는 TCP 소켓을 사용한다.
 - 각 Config API 연결은 인터페이스 세대를 판정하는 읽기 전용 GetDeviceInfo 요청으로 시작한다. v1.0.x이면 연결을 닫고, Config API 호출은 송신 없이 `kNotSupported`를 반환한다.

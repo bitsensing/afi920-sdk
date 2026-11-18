@@ -43,7 +43,7 @@ static std::vector<uint8_t> make_spi(uint8_t n_fov,
         pack_f32(seg + 4, 1.0f);
         pack_f32(seg + 8, -0.3f);
         pack_f32(seg + 12, 0.3f);
-        seg[16] = (i == 0) ? 0 : 3;  // NO_BLOCKAGE / UNKNOWN
+        seg[16] = (i == 0) ? 0 : 2;  // NONE / FULL_BLOCKAGE
         buf.insert(buf.end(), seg, seg + sizeof(seg));
     }
 
@@ -102,7 +102,7 @@ TEST(parse_fov_segments) {
     CHECK(msg.fov_segments[0].azimuth_begin == -1.0f);
     CHECK(msg.fov_segments[0].azimuth_end == 1.0f);
     CHECK(msg.fov_segments[0].blockage_status == BTS_SPI_BS_NONE);
-    CHECK(msg.fov_segments[1].blockage_status == BTS_SPI_BS_UNKNOWN);
+    CHECK(msg.fov_segments[1].blockage_status == BTS_SPI_BS_FULL_BLOCKAGE);
     PASS("parse_fov_segments");
 }
 

@@ -10,19 +10,11 @@ namespace afi {
 
 static constexpr size_t kRdiHeaderSize    = BTS_RDI_HEADER_SIZE;     // 36
 static constexpr size_t kRdiDetectionSize = BTS_RDI_DETECTION_SIZE;  // 51
-static constexpr size_t kRdiMaxDetections = BTS_RDI_MAX_DETECTIONS;  // 8192
+// The single-message format of interface v1.0.x and v1.1.0 defines up to 8192
+// detections; v1.2.0 sends at most 2048 in header/chunk messages.
+static constexpr size_t kRdiMaxDetections = BTS_RDI_LEGACY_MAX_DETECTIONS;
 
-int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
-    frame.message = {};
-    frame.detections_storage.clear();
-    if (!payload || len < kRdiHeaderSize) {
-        AFI_LOG_ERROR("RDI payload too short: %zu < %zu", len, kRdiHeaderSize);
-        return -1;
-    }
-
-    auto& msg = frame.message;
-    const uint8_t* p = payload;
-
+void RdiParser::ParseDetectionHeader(const uint8_t* p, bts_rdi_message_t& msg) {
     // ─── Common Interface Header (24 bytes) ───
     msg.interface_version.major = p[0];
     msg.interface_version.minor = p[1];
@@ -43,6 +35,21 @@ int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
     // ─── Detection List Info (4 bytes) ───
     msg.recognised_detections_capability = detail::unpack_le16(p + 32);
     msg.num_detections = detail::unpack_le16(p + 34);
+}
+
+int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
+    frame.message = {};
+    frame.detections_storage.clear();
+    frame.chunk_count = 0;
+    frame.chunks_received = 0;
+    frame.announced_detections = 0;
+    if (!payload || len < kRdiHeaderSize) {
+        AFI_LOG_ERROR("RDI payload too short: %zu < %zu", len, kRdiHeaderSize);
+        return -1;
+    }
+
+    auto& msg = frame.message;
+    ParseDetectionHeader(payload, msg);
 
     // Validate detection count
     if (msg.num_detections > kRdiMaxDetections) {
@@ -65,6 +72,7 @@ int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
         const uint8_t* det_ptr = payload + kRdiHeaderSize + i * kRdiDetectionSize;
         ParseDetection(det_ptr, frame.detections_storage[i]);
     }
+    frame.announced_detections = msg.num_detections;
 
     // Point message.detections to our storage
     msg.detections = frame.detections_storage.empty()
@@ -73,7 +81,21 @@ int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
     return 0;
 }
 
-int RdiParser::ParseDetection(const uint8_t* d, bts_rdi_detection_t& det) {
+int RdiParser::ParseHeaderMessage(const uint8_t* body, size_t len,
+                                  bts_rdi_message_t& msg, RdiListLayout& layout) {
+    if (!body || len != BTS_RDI_HEADER_MSG_SIZE) {
+        AFI_LOG_ERROR("RDI header message size %zu != %u", len,
+                      static_cast<unsigned>(BTS_RDI_HEADER_MSG_SIZE));
+        return -1;
+    }
+    msg = {};
+    ParseDetectionHeader(body, msg);
+    layout.entities_per_chunk = detail::unpack_le16(body + kRdiHeaderSize);
+    layout.chunk_count = detail::unpack_le16(body + kRdiHeaderSize + 2);
+    return 0;
+}
+
+void RdiParser::ParseDetection(const uint8_t* d, bts_rdi_detection_t& det) {
     // Status (9 bytes)
     det.existence_probability = d[0];
     det.detection_id          = detail::unpack_le16(d + 1);
@@ -96,8 +118,6 @@ int RdiParser::ParseDetection(const uint8_t* d, bts_rdi_detection_t& det) {
     // Dynamics (8 bytes)
     det.relative_velocity_radial       = detail::unpack_le_f32(d + 43);
     det.relative_velocity_radial_error = detail::unpack_le_f32(d + 47);
-
-    return 0;
 }
 
 } // namespace afi

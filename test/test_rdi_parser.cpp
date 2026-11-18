@@ -60,7 +60,9 @@ static std::vector<uint8_t> make_rdi(uint16_t n) {
 TEST(layout_constants) {
     CHECK(BTS_RDI_HEADER_SIZE == 36u);
     CHECK(BTS_RDI_DETECTION_SIZE == 51u);
-    CHECK(BTS_RDI_MAX_DETECTIONS == 8192u);
+    CHECK(BTS_RDI_MAX_DETECTIONS == 2048u);         // sent per scan (v1.2.0)
+    CHECK(BTS_RDI_LEGACY_MAX_DETECTIONS == 8192u);  // single-message format limit
+    CHECK(BTS_RDI_HEADER_MSG_SIZE == 40u);
     PASS("layout_constants");
 }
 
@@ -107,7 +109,7 @@ TEST(parse_detections) {
 }
 
 TEST(data_qualifier_1_and_6_are_delivered) {
-    // System Spec 8.3: the radar sends DQ 0, 1, 6. The parser passes the
+    // Interface Overview §3.3.5: the radar sends DQ 0, 1, 6. The parser passes the
     // value through; the consumer decides how to use DQ 1 and DQ 6 frames.
     for (uint8_t dq : {uint8_t{1}, uint8_t{6}}) {
         auto buf = make_rdi(1);
@@ -122,16 +124,37 @@ TEST(data_qualifier_1_and_6_are_delivered) {
 }
 
 TEST(parse_maximum_detection_count) {
-    auto buf = make_rdi(BTS_RDI_MAX_DETECTIONS);
+    // The single-message format of v1.0.x and v1.1.0 is defined up to 8192.
+    auto buf = make_rdi(BTS_RDI_LEGACY_MAX_DETECTIONS);
     RdiParser parser;
     AfiRdiFrame frame{};
     CHECK(buf.size() == BTS_RDI_MAX_PAYLOAD_SIZE);
     CHECK(parser.Parse(buf.data(), buf.size(), frame) == 0);
-    CHECK(frame.message.num_detections == BTS_RDI_MAX_DETECTIONS);
+    CHECK(frame.message.num_detections == BTS_RDI_LEGACY_MAX_DETECTIONS);
+    CHECK(frame.announced_detections == BTS_RDI_LEGACY_MAX_DETECTIONS);
+    CHECK(frame.chunk_count == 0 && frame.IsComplete());
     CHECK(frame.message.detections[0].detection_id == 100);
-    CHECK(frame.message.detections[BTS_RDI_MAX_DETECTIONS - 1].detection_id ==
-          static_cast<uint16_t>(100 + BTS_RDI_MAX_DETECTIONS - 1));
+    CHECK(frame.message.detections[BTS_RDI_LEGACY_MAX_DETECTIONS - 1].detection_id ==
+          static_cast<uint16_t>(100 + BTS_RDI_LEGACY_MAX_DETECTIONS - 1));
     PASS("parse_maximum_detection_count");
+}
+
+TEST(parse_header_message) {
+    auto buf = make_rdi(0);
+    pack_le16(&buf[34], 60);
+    buf.resize(BTS_RDI_HEADER_MSG_SIZE, 0);
+    pack_le16(&buf[36], 27);
+    pack_le16(&buf[38], 3);
+
+    bts_rdi_message_t msg{};
+    RdiListLayout layout;
+    CHECK(RdiParser::ParseHeaderMessage(buf.data(), buf.size(), msg, layout) == 0);
+    CHECK(msg.message_counter == 42);
+    CHECK(msg.num_detections == 60);
+    CHECK(msg.detections == nullptr);
+    CHECK(layout.entities_per_chunk == 27 && layout.chunk_count == 3);
+    CHECK(RdiParser::ParseHeaderMessage(buf.data(), 36, msg, layout) < 0);
+    PASS("parse_header_message");
 }
 
 TEST(owning_frame_copy_and_move) {

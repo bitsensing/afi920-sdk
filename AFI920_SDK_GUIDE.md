@@ -325,8 +325,8 @@ The Python SDK has no streaming callbacks. Receive RDI (30509), SHII (30510) and
 |----------|--------|
 | `strip_e2e(frame, validate=True, expected_data_id=None)` | `(e2e, body)`. `e2e` holds `length_ok`, `data_id_ok`, `crc_zero`, `crc_ok`, `ok` and `generation` |
 | `parse_rdi_frame(payload)` / `parse_rdi_detection(payload, det_start, index)` | RDI header dict / one detection dict |
-| `parse_shi(payload)` | Common Header plus `operation_modes`, `defect_recognised`, `defect_reason`, `supply_voltage_status`, `temperature_status`, `input_signal_types`, `input_signal_statuses`, `time_sync`, `calibration_components`, `calibration_statuses`, `calibration_states` |
-| `parse_spi(payload)` | Common Header plus `vehicle_coord_system`, `pose`, `fov_segments`, `recognisable_object_types`, `reference_target_types` |
+| `parse_shi(payload)` | ISO23150 Header plus `operation_modes`, `defect_recognised`, `defect_reason`, `supply_voltage_status`, `temperature_status`, `input_signal_types`, `input_signal_statuses`, `time_sync`, `calibration_components`, `calibration_statuses`, `calibration_states` |
+| `parse_spi(payload)` | ISO23150 Header plus `vehicle_coord_system`, `pose`, `fov_segments`, `recognisable_object_types`, `reference_target_types` |
 | `SomeipTpReassembler(max_payload_size, max_sessions=8, max_segment_size=1392)` | UDP SOME/IP-TP reassembly: `feed(tp_header, payload, session_id)` |
 
 Use `E2E_DATA_ID_RDI`, `E2E_DATA_ID_SHII` and `E2E_DATA_ID_SPI` as `expected_data_id`. `python/examples/sample_data_stream.py` wraps this in a reusable `StreamReceiver` class for TCP and UDP.
@@ -370,7 +370,7 @@ Interface v1.1.0 gates the Config API by access mode. Every config SET needs the
 | Radar network and all stream destinations | `SetNetworkConfig` (full update) | `set_network_config(**fields)` (partial update) | Always `true` |
 | One stream destination | `SetStreamDestination` | `set_stream_destination` | |
 | Range mode | `SetRangeMode` | `set_range_mode` | Always `true` |
-| SNR level and CFAR tables | `SetDetectionThreshold` | `set_detection_threshold` | |
+| CFAR tables | `SetDetectionThreshold` | `set_detection_threshold` | |
 | Detection filters | `SetDetectionFilters` | `set_detection_filters` | |
 | PTP profile | `SetPtpConfig` | `set_ptp_config` / `set_ptp_config_with_result` | When the stored profile differs from the running one |
 | Mounting position, rotation, position code | `SetMountingPosition`, `SetRotation`, `SetSensorPosition` | `set_mounting_position`, `set_rotation`, `set_sensor_position` | |
@@ -410,7 +410,7 @@ elif sdk.set_range_mode(RangeMode.LONG_RANGE) == OK:
 
 ## 8. Configuration API
 
-The Config API runs over its own TCP connection (port 30500), independent of the data streams. All calls are synchronous. The radar serves one Config API client at a time and answers `BUSY` above 200 requests per second.
+The Config API runs over its own TCP connection (port 30500), independent of the data streams. All calls are synchronous. The radar serves one Config API client at a time and answers `BUSY` above 200 requests per second. For up to 3 s after boot, while the stored settings are still being read, it also answers `BUSY` to every method that writes NVM (each `SET` except `SetMode`, and `ResetAllSettings`).
 
 | | C++ | Python |
 |---|-----|--------|
@@ -432,7 +432,7 @@ cfg.enable_rdi = false;                          // Config API only
 afi::AfiSdk sdk;
 if (sdk.Init(cfg) != afi::kOk) return 1;
 
-afi::AfiDeviceInfo info;                         // serial, model, HW/SW version, hashes, MAC
+afi::AfiDeviceInfo info;                         // serial, model, HW/SW version, hashes, MAC, VLAN ID
 if (sdk.GetDeviceInfo(info) == afi::kOk)
     printf("Serial: %s  SW: %s\n", info.serial_number.c_str(), info.software_version.c_str());
 
@@ -441,7 +441,7 @@ afi::AfiDiagnosticInfo diag;       sdk.GetDiagnosticInfo(diag);      // combined
 afi::AfiNetworkConfig net;         sdk.GetNetworkConfig(net);        // radar network + stream destinations
 afi::AfiDetectionThreshold thresh; sdk.GetDetectionThreshold(thresh);
 afi::AfiDetectionFilters filters;  sdk.GetDetectionFilters(filters);
-afi::AfiPtpConfig ptp;             sdk.GetPtpConfig(ptp);            // profiles + live sync status
+afi::AfiPtpConfig ptp;             sdk.GetPtpConfig(ptp);            // profiles + PTP port state
 afi::AfiModeStatus mode_status;    sdk.GetMode(mode_status);
 
 afi::AfiRangeMode mode;
@@ -530,14 +530,13 @@ Values above 6 return `kInvalidParam` / `INVALID_PARAM` without sending. `AfiRan
 ### Detection Tuning
 
 ```cpp
-// C++: SNR level and 19-entry CFAR tables (levels 1..9, not physical dB)
+// C++: 19-entry CFAR tables (levels 1..9) of the stored range mode
 afi::AfiDetectionThreshold thresh;
 sdk.GetDetectionThreshold(thresh);
-thresh.snr_dB = 6.0f;                            // wire key snr_threshold_db; fractions allowed
 thresh.cfar_table_first_frame.assign(afi::AfiDetectionThreshold::kCfarTableLength, 5);
 sdk.SetDetectionThreshold(thresh);               // second-frame table is used in DR and UDR only
 
-// Eight filter toggles; the SDK sends all eight
+// Five filter toggles; the SDK sends all five
 afi::AfiDetectionFilters filters;
 sdk.GetDetectionFilters(filters);
 filters.filter_ground_reflection = true;
@@ -546,27 +545,22 @@ sdk.SetDetectionFilters(filters);
 ```
 
 ```python
-# Python (any subset; values outside 1..9 or tables not of 19 entries give INVALID_PARAM)
-sdk.set_detection_threshold(snr_db=6.0, cfar_table_first_frame=[5] * 19)
+# Python (any subset; levels outside 1..9 or tables not of 19 entries give INVALID_PARAM)
+sdk.set_detection_threshold(cfar_table_first_frame=[5] * 19)
 sdk.set_detection_filters(filter_ground_reflection=True, filter_multibounce_2x=True)
 ```
 
 | Filter | Default |
 |--------|---------|
-| `filter_ego_specular` | `false` |
 | `filter_ground_sidelobe` | `true` |
-| `filter_upper_structure` | `false` |
 | `filter_multibounce_2x` | `true` |
 | `filter_structure_multipath` | `true` |
 | `filter_specular_mirror` | `true` |
-| `filter_wheel_microdoppler` | `false` |
-| `filter_ground_reflection` | `false` (SR subcycle) |
-
-FW v3.1.1 stores the SNR level but does not use it in detection. It stores `filter_ego_specular`, `filter_upper_structure` and `filter_wheel_microdoppler` but does not build those stages.
+| `filter_ground_reflection` | `false` |
 
 ### Time Sync (PTP)
 
-`SetPtpConfig(profile)` / `SetPtpConfig(profile, &restart_required)` stores `0` (gPTP), `1` (1588v2-L2) or `2` (1588v2-UDP); values above 2 give `kInvalidParam`. `GetPtpConfig` returns the running `profile`, the stored `configured_profile`, `restart_required`, the live `state` (`"INIT"`, `"SLAVE"`, `"NOT_SYNCED"`), `offset_ns`, `mean_path_delay_ns`, `master_clock_id`, and `grid_offset_ns` / `grid_state` (system time versus PTP time). Python: `get_ptp_config()`, `set_ptp_config(profile=0)`, `set_ptp_config_with_result(profile=0)`.
+`SetPtpConfig(profile)` / `SetPtpConfig(profile, &restart_required)` stores `0` (gPTP), `1` (1588v2-L2) or `2` (1588v2-UDP); values above 2 give `kInvalidParam`. `GetPtpConfig` returns the running `profile`, the stored `configured_profile`, `restart_required`, the PTP port `state` (`"INIT"`, `"SLAVE"`, `"NOT_SYNCED"`; SHII SensorTimeSync reports the lock verdict), `offset_ns`, `mean_path_delay_ns`, `master_clock_id`, and `grid_offset_ns` / `grid_state` (radiate and send grid versus system time; stream timestamps are system time). Python: `get_ptp_config()`, `set_ptp_config(profile=0)`, `set_ptp_config_with_result(profile=0)`.
 
 ### Full Config API Method Catalog
 
@@ -574,7 +568,7 @@ FW v3.1.1 stores the SNR level but does not use it in detection. It stores `filt
 |-----------------------|-----|--------|
 | Connection (SDK side) | `GetLastSensorResult`, `GetInterfaceGeneration`, `ReconnectConfigApi` | `last_error`, `last_result`, `interface_generation`, `reconnect`, `close`, `connected` |
 | Access Mode (`0x00E0`–`0x00E1`) | `GetMode`, `SetMode`, `EnterMode` | `get_mode`, `set_mode`, `enter_mode` |
-| Device & Status (`0x0010`–`0x0016`) | `GetDeviceInfo`, `GetSensorStatus`, `GetDiagnosticInfo`, `Restart`, `ResetAllSettings`, `GetCommandHistoryInfo` | `get_device_info`, `get_sensor_status`, `get_diagnostic_info`, `restart`, `reset_all_settings`, `get_command_history_info` |
+| Device & Status (`0x0010`–`0x0017`) | `GetDeviceInfo`, `GetSensorStatus`, `GetDiagnosticInfo`, `Restart`, `ResetAllSettings`, `GetCommandHistoryInfo`, `GetFaultLog` | `get_device_info`, `get_sensor_status`, `get_diagnostic_info`, `restart`, `reset_all_settings`, `get_command_history_info`, `get_fault_log` |
 | Network (`0x0020`–`0x0021`) | `GetNetworkConfig`, `SetNetworkConfig`, `SetStreamDestination` | `get_network_config`, `set_network_config`, `set_stream_destination` |
 | Range Mode (`0x0030`–`0x0031`) | `GetRangeMode`, `SetRangeMode` | `get_range_mode`, `set_range_mode` |
 | Detection (`0x0040`–`0x0043`) | `GetDetectionThreshold`, `SetDetectionThreshold`, `GetDetectionFilters`, `SetDetectionFilters` | `get_detection_threshold`, `set_detection_threshold`, `get_detection_filters`, `set_detection_filters` |
@@ -851,10 +845,11 @@ for s in AfiSdk.discover(timeout_s=3.0, bind_ip="192.168.10.100"):
 | `bootloader_hash`, `fw_hash` | Git short hashes of the running images |
 | `ip`, `source_ip` | Address the sensor reports (`source_ip` when absent) / address the response came from |
 | `subnet_mask`, `gateway`, `port` | Radar network; `port` is the Config API port (30500) |
+| `vlan_id` | VLAN ID of this boot (0 = no VLAN) |
 | `detection_port`, `health_port`, `performance_port` | RDI / SHII / SPI ports |
 | `detection_protocol`, `health_protocol`, `performance_protocol` | `"tcp"` or `"udp"` |
 | `detection_ip`, `health_ip`, `performance_ip`, `host_ip` | Stream destination IPs |
-| `range_mode`, `range_mode_name` | Stored range mode |
+| `range_mode`, `range_mode_name` | SHII SensorOperationMode with the current access mode applied: `0`..`6` running range mode, `10` Degradation, `20` Diagnostic, `21` Programming, `100` Fault, `200` Initialising. Not the stored `GetRangeMode` value |
 | `position_code`, `offset_x/y/z`, `yaw_deg`, `pitch_deg`, `roll_deg` | Mounting values |
 | `radar_active`, `scan_index`, `uptime_seconds` | Operation state, current MessageCounter, uptime (s) |
 | `ptp_state`, `ptp_offset_ns` | PTP status |
@@ -927,7 +922,9 @@ for idx, ip in enumerate(["192.168.10.150", "192.168.10.151"]):
 
 ## 13. Interface v1.0.x Compatibility
 
-SDK 2.2.0 receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) as well as interface v1.1.0 (firmware 3.1.1). The Config API and the firmware update are interface v1.1.0 only. Support for v1.0.x ends with this release.
+The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0), v1.1.0 (firmware 3.1.1) and v1.2.0. The Config API and the firmware update are interface v1.1.0 and later.
+
+Interface v1.2.0 sends one RDI scan as header A, chunk messages and header B (SOME/IP Interface Version 0x02; Events `0x8002` and `0x8100` to `0x814B`, one E2E Data ID per Event). The SDK assembles them into one `AfiRdiFrame` per scan by the E2E Counter (Interface Overview §3.2.3), so an RDI callback receives the same frame from every generation. A scan with missing chunks is delivered with the detections that arrived: `chunk_count`, `chunks_received`, `announced_detections` and `IsComplete()` report it, and a scan without any header message is dropped. The payload callback receives every message with its `event_id` and `someip_interface_version`. Python receivers use `streams.RdiStreamDecoder`, which returns one single-message RDI payload per scan for `parse_rdi_frame`.
 
 | Function | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
 |----------|-----------------------------|--------------------------------------|
@@ -942,11 +939,12 @@ How the SDK learns the generation:
 
 - Each Config API connection opens with a read-only GetDeviceInfo request. A v1.0.x answer closes the connection, and every later Config API call returns `kNotSupported` without sending until the next connect. `GetLastSensorResult()` then reads `NOT_SUPPORTED` with an `error_message`, and Python `connected` is `False`.
 - With the Config API off, the generation comes from the last stream frame that passed the E2E check.
-- `GetInterfaceGeneration()` (C++) / `interface_generation` (Python) report `kUnknown` (0), `kV1_0` (1) or `kV1_1` (2) / `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`.
+- `GetInterfaceGeneration()` (C++) / `interface_generation` (Python) report `kUnknown` (0), `kV1_0` (1), `kV1_1` (2) or `kV1_2` (3) / `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`, `INTERFACE_GEN_V1_2`.
+- Interface v1.2.0 adds the `if_version` key to Discovery and GetDeviceInfo. The SDK reads it first; the E2E header alone cannot tell v1.1.0 from v1.2.0, so stream frames mark v1.2.0 by the RDI framing and the ISO23150 Header interface version.
 - Per frame: `generation` in `AfiRdiFrame`, `AfiStreamMeta` and `AfiWirePayloadFrame`; Python `strip_e2e()` returns `e2e["generation"]`. Per sensor: `AfiSensorInfo::generation` and the Python Discovery key `_interface_generation` (`discovery_generation(info)`).
 - With the Config API off and before the first stream frame, the generation is unknown and CSII uses UDP. Set `csii_transport = "tcp"` to reach a v1.0.x sensor from the first call.
 
-The stream layouts are the same in both generations and the SDK passes every value through unchanged. These fields mean different things on v1.0.x; the Common Header interface version (`1.0.0` or `1.1.0`) tells the generations apart.
+The stream layouts are the same in both generations and the SDK passes every value through unchanged. These fields mean different things on v1.0.x; the ISO23150 Header interface version (`1.0.0` or `1.1.0`) tells the generations apart.
 
 | Field | Interface v1.0.x | Interface v1.1.0 |
 |-------|------------------|------------------|
@@ -1003,7 +1001,7 @@ The Python `AfiSdkConfig` dataclass has `sensor_ip`, `config_port`, `csii_port`,
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
 | `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header |
 
-`message` holds the Common Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 sends at most 2048.
+`message` holds the ISO23150 Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 sends at most 2048.
 
 ### Detection Fields (`bts_rdi_detection_t`, 51 bytes)
 
@@ -1029,7 +1027,7 @@ Positions are spherical. Convert to Cartesian in your own code if needed.
 
 ### `AfiShiMessage` (= `bts_shi_message_t`, sensor health)
 
-Common Header fields, `num_valid_operation_modes` / `sensor_operation_modes[]` (DR..UDR `0..6`, Degradation `10`, Evaluation `50`, Calibration `100`, Initialising `200`, Test `201`), `sensor_defect_recognised`, `sensor_defect_reason`, `supply_voltage_status`, `sensor_temperature_status`, `num_valid_input_signal_statuses` / `sensor_input_signal_types[]` / `sensor_input_signal_statuses[]`, `sensor_time_sync`, and `num_valid_calibration_components` / `sensor_calibration_components[]` / `sensor_calibration_statuses[]` / `sensor_calibration_states[]`. Variable length.
+ISO23150 Header fields, `num_valid_operation_modes` / `sensor_operation_modes[]` (DR..UDR `0..6`, Degradation `10`, Diagnostic `20`, Programming `21`, Fault `100`, Initialising `200`), `sensor_defect_recognised`, `sensor_defect_reason`, `supply_voltage_status`, `sensor_temperature_status`, `num_valid_input_signal_statuses` / `sensor_input_signal_types[]` / `sensor_input_signal_statuses[]`, `sensor_time_sync`, and `num_valid_calibration_components` / `sensor_calibration_components[]` / `sensor_calibration_statuses[]` / `sensor_calibration_states[]`. Variable length.
 
 ### `AfiSpiMessage` (= `bts_spi_message_t`, sensor performance and pose)
 
@@ -1051,7 +1049,7 @@ The Config API rotation (`AfiRotation`, `get_rotation()`) is in degrees; the SPI
 |-------|:---:|:---:|-------------|
 | `stream` | | ✓ | `AfiStreamKind::kDetection`, `kHealth` or `kPerformance` |
 | `recv_timestamp_ns` | ✓ | ✓ | Host receive time (steady clock) |
-| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO Common Header timestamp and MessageCounter |
+| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO23150 Header timestamp and MessageCounter |
 | `e2e_counter`, `e2e_checked`, `e2e_valid` | ✓ | ✓ | E2E Counter and verdict |
 | `payload` | | ✓ | E2E header plus ISO payload, exactly as reassembled |
 | `generation` | ✓ | ✓ | Sender's generation |
@@ -1063,11 +1061,12 @@ The Config API rotation (`AfiRotation`, `get_rotation()`) is in degrees; the SPI
 | `AfiModeStatus` | `access_mode` (`AfiAccessMode`), `access_mode_name` (`"normal"` / `"diagnostic"` / `"programming"`), `elapsed_ms`, `streams_halted` |
 | `AfiSensorResult` | `return_code` (`-1` when no response arrived), `return_name` (for example `"SESSION_REQUIRED"`), `error_message` (firmware update methods), `e2e_ok` |
 | `AfiInterfaceGeneration` | `kUnknown` (0), `kV1_0` (1), `kV1_1` (2) |
-| `AfiDeviceInfo` | `serial_number`, `mac_address`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash` |
+| `AfiDeviceInfo` | `serial_number`, `mac_address`, `vlan_id`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash` |
 | `AfiSensorStatus` | `operation_state`, `operation_state_code`, `temperature_mcu`, `temperature_rf`, `voltage`, `uptime_sec` |
 | `AfiNetworkConfig` | `ip_address`, `subnet_mask`, `gateway`, `api_port`, `vlan_id`, `detection`, `health`, `performance` (`AfiStreamDestination`: `ip`, `port`, `protocol`) |
+| `AfiFaultLogPage` | `ring` (`AfiFaultLogRing::kFault` / `kSample`), `slots`, `head`, `boot_count`, `slot`, `records` (128 B raw slots) |
 | `AfiBootInfo` | `fw_update_active`, `fw_update_valid_a`, `fw_update_valid_b`, `fw_update_boot_count`, `boot_info_status` |
-| `AfiOtaStatus` | `state` (`"idle"`, `"transferring"`, `"verifying"`, `"writing"`, `"error"`), `progress_pct`, `current_component`, `error_message` |
+| `AfiOtaStatus` | `state` (`"idle"`, `"initializing"`, `"transferring"`, `"verifying"`, `"writing"`, `"error"`), `progress_pct`, `current_component`, `error_message` |
 
 ---
 
@@ -1088,7 +1087,7 @@ C++ codes are the `afi::AfiError` enum in `afi_error.h`. Python constants have t
 | `kSensorError` | `-8` | `SENSOR_ERROR` | Other radar return code (for example `INTERNAL_ERROR`) |
 | `kInternalError` | `-9` | `INTERNAL_ERROR` | Internal SDK error |
 | `kNotSupported` | `-10` | `NOT_SUPPORTED` | Radar `NOT_SUPPORTED`, or an interface v1.0.x sensor (nothing sent) |
-| `kBusy` | `-11` | `BUSY` | Radar `BUSY`: more than 200 requests per second |
+| `kBusy` | `-11` | `BUSY` | Radar `BUSY`: more than 200 requests per second, a `GetFaultLog` flash job in progress, or an NVM write within 3 s of boot |
 | `kSessionRequired` | `-12` | `SESSION_REQUIRED` | Radar `SESSION_REQUIRED`: method not open in the current access mode |
 | `kAccessDenied` | `-13` | `ACCESS_DENIED` | Radar `ACCESS_DENIED`: mode re-entry or a step back; reboot to leave Programming |
 | `kInvalidState` | `-14` | `INVALID_STATE` | Radar `INVALID_STATE`: step out of order, for example update session not idle |
@@ -1172,7 +1171,7 @@ Over TCP each sensor keeps the default ports, so no offset is needed.
 | Every Config API call returns `kNotInitialized` | `enable_config_api = false`, before `Init()`, or after `Stop()` |
 | Every Config API call returns `kNotSupported` | Interface v1.0.x sensor: `GetInterfaceGeneration() == kV1_0`. Data streams and CSII still work |
 | `kTimeout` / `kDisconnected` on Config API calls | The radar serves one Config API client; close other clients. The next call reconnects |
-| `kBusy` | More than 200 requests per second |
+| `kBusy` | More than 200 requests per second. From `GetFaultLog`, a flash erase or write was in progress. From a `SET` right after a restart, the stored settings were still being read. Retry |
 | CSII has no effect on a v1.0.x sensor with the Config API off | Generation unknown, so CSII used UDP. Set `csii_transport = "tcp"` |
 | E2E warnings in the log | Check `e2e_valid` per frame; `e2e_strict = true` drops failing frames |
 | RDI loss callback reports loss | Over UDP, raise `socket_buffer_size` or use TCP. A gap also counts slots not sent to this host (before the first scan, TCP backlog) |

@@ -37,6 +37,8 @@ public:
     int Restart();
     int ResetAllSettings();
     int GetCommandHistoryInfo(AfiCommandHistory& out);
+    int GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count,
+                    AfiFaultLogPage& out);
 
     // ─── Network (0x002x) ───
     int GetNetworkConfig(AfiNetworkConfig& out);

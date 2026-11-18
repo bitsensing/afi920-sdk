@@ -49,16 +49,27 @@ typedef enum {
 #define BTS_SOMEIP_SERVICE_ID           (0x6000u)
 
 /* Event IDs */
-#define BTS_SOMEIP_EVENT_SII            (0x8001u)  /* CSII (reserved) */
-#define BTS_SOMEIP_EVENT_RDI            (0x8002u)
+#define BTS_SOMEIP_EVENT_SII            (0x8001u)  /* CSII (Host->Radar, UDP 30501) */
+#define BTS_SOMEIP_EVENT_RDI            (0x8002u)  /* RDI header A and header B (same Event ID) */
 #define BTS_SOMEIP_EVENT_SHII           (0x8003u)
 #define BTS_SOMEIP_EVENT_SPI            (0x8004u)
+#define BTS_SOMEIP_EVENT_SECURITY       (0x8008u)  /* Security Event, reserved, not transmitted */
+#define BTS_SOMEIP_EVENT_RDI_CHUNK_BASE (0x8100u)  /* RDI chunk k = base + k, k = 0..75 */
+
+/* interface 판. ISO23150 Header InterfaceVersionID(RDI · SHII · SPI)와 Discovery · GetDeviceInfo `if_version` 이
+ * 이 값을 싣는다. SOME/IP Interface Version(아래)과 별개이다. */
+#define BTS_INTERFACE_VERSION_MAJOR     (1u)
+#define BTS_INTERFACE_VERSION_MINOR     (2u)
+#define BTS_INTERFACE_VERSION_PATCH     (0u)
+#define BTS_INTERFACE_VERSION_STR       "1.2.0"
 
 /* Protocol constants */
 #define BTS_SOMEIP_PROTOCOL_VERSION     (0x01u)
-#define BTS_SOMEIP_INTERFACE_VERSION    (0x01u)
+#define BTS_SOMEIP_INTERFACE_VERSION    (0x01u)  /* every channel except RDI header/chunk messages */
+#define BTS_SOMEIP_INTERFACE_VERSION_RDI (0x02u) /* RDI header/chunk messages (0x8002, 0x8100~0x814B) */
 #define BTS_SOMEIP_MSGTYPE_NOTIFICATION (0x02u)
 #define BTS_SOMEIP_MSGTYPE_TP_FLAG      (0x20u)
+#define BTS_SOMEIP_MSGTYPE_TP_NOTIFICATION (0x22u)
 #define BTS_SOMEIP_RETURN_OK            (0x00u)
 #define BTS_SOMEIP_CLIENT_ID            (0x0001u)
 
@@ -67,6 +78,9 @@ typedef enum {
 #define BTS_SOMEIP_TP_HEADER_SIZE       (4u)
 #define BTS_SOMEIP_TP_CHUNK_SIZE        (1392u)
 #define BTS_SOMEIP_TP_OFFSET_UNIT       (16u)
+/* UDP payload limit: MTU 1500 - IP 20 - UDP 8. A non-TP SOME/IP message
+ * (header included) must fit in one datagram of this size. */
+#define BTS_SOMEIP_UDP_PAYLOAD_MAX      (1472u)
 
 /*============================================================================
  * Interface IDs
@@ -156,8 +170,10 @@ static inline void bts_pack_le64(uint8_t* p, uint64_t v) {
 }
 
 static inline void bts_pack_f32(uint8_t* p, float f) {
+    union { float f; uint32_t u; } c;
     uint32_t u;
-    memcpy(&u, &f, sizeof(u));
+    c.f = f;
+    u = c.u;
 #ifdef BTS_ISO23150_BIG_ENDIAN
     bts_pack_be32(p, u);
 #else

@@ -60,7 +60,8 @@ int e2e_parse(const uint8_t* buf, size_t len, E2eHeader& out) {
 }
 
 E2eStatus e2e_validate(const uint8_t* buf, size_t len, E2eHeader& out,
-                       uint32_t expected_data_id, bool check_crc) {
+                       uint32_t expected_data_id, bool check_crc,
+                       bool allow_zero_crc) {
     if (e2e_parse(buf, len, out) < 0) return E2eStatus::kTooShort;
     const size_t body_len = len - BTS_E2E_HEADER_SIZE;
     if (out.length != body_len) {
@@ -71,8 +72,12 @@ E2eStatus e2e_validate(const uint8_t* buf, size_t len, E2eHeader& out,
     }
     if (!check_crc) return E2eStatus::kOk;
 
-    // System Spec §7.5: a zero CRC field is never a pass.
-    if (out.crc_high == 0 && out.crc == 0) return E2eStatus::kCrcZero;
+    // Interface Overview §3.2.5: a zero CRC field is never a pass, except under the
+    // allow_zero_crc exception, which rests on the Data ID and Length checks
+    // above.
+    if (out.crc_high == 0 && out.crc == 0) {
+        return allow_zero_crc ? E2eStatus::kOk : E2eStatus::kCrcZero;
+    }
     if (out.crc_high != 0) {
         // Interface v1.0.x: CRC-64/XZ over Length, Counter, Data ID and body.
         const uint64_t want = (static_cast<uint64_t>(out.crc_high) << 32) | out.crc;

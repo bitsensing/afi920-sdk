@@ -14,7 +14,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python" / "src"))
 
 from afi_sdk import streams  # noqa: E402
-from afi_sdk.someip import INTERFACE_GEN_V1_0, INTERFACE_GEN_V1_1  # noqa: E402
+from afi_sdk.someip import (INTERFACE_GEN_V1_0, INTERFACE_GEN_V1_1,  # noqa: E402
+                            INTERFACE_GEN_V1_2, discovery_generation,
+                            generation_from_if_version)
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
@@ -155,6 +157,8 @@ def test_e2e_data_ids():
     assert streams.e2e_data_id(0x00E1) == 0x600000E1
 
 
+
+
 # ── SOME/IP-TP ──
 
 def _tp_header(offset: int, more: bool) -> bytes:
@@ -287,6 +291,8 @@ def test_rdi_udp_sender_matches_current_wire_contract():
         protected, expected_data_id=streams.E2E_DATA_ID_RDI)
     assert e2e["crc_ok"] and e2e["counter"] == 8
     assert iso == large_payload
+
+
 
 
 # ── SHII (variable length) ──
@@ -447,6 +453,113 @@ def test_csii_frame_roundtrip():
     assert e2e["counter"] == 5
     assert e2e["data_id"] == streams.E2E_DATA_ID_CSII
     assert iso == p
+
+
+# ── RDI interface v1.2.0 header/chunk messages ──
+
+def _rdi_v12_frame(event, e2e_counter, body, iface=0x02):
+    e2e = streams.build_e2e_header(streams.e2e_data_id(event), e2e_counter, body)
+    hdr = struct.pack(">HHIHHBBBB", 0x6000, event, 8 + len(e2e) + len(body),
+                      0x0001, 1, 0x01, iface, 0x02, 0x00)
+    return hdr + e2e + body
+
+
+def _rdi_v12_scan(n, message_counter=1234):
+    """Header body and chunk bodies of one scan with n detections."""
+    common = bytearray(24)
+    common[0:4] = bytes([1, 2, 0, 0x08])
+    struct.pack_into("<I", common, 14, message_counter)
+    header = (bytes(common) + struct.pack("<ff", -111.11, 55.56)
+              + struct.pack("<HH", 2048, n)
+              + struct.pack("<HH", 27, (n + 26) // 27))
+    chunks = []
+    for k in range((n + 26) // 27):
+        first = k * 27
+        count = min(27, n - first)
+        dets = b""
+        for i in range(first, first + count):
+            det = bytearray(51)
+            struct.pack_into("<H", det, 1, i)            # DetectionID
+            struct.pack_into("<f", det, 19, 1.0 + i)     # radial distance
+            dets += bytes(det)
+        chunks.append(struct.pack("<IHH", message_counter, first, count) + dets)
+    return header, chunks
+
+
+def test_rdi_v12_scan_decodes_to_a_single_message_payload():
+    header, chunks = _rdi_v12_scan(30)
+    dec = streams.RdiStreamDecoder()
+    out = dec.feed(_rdi_v12_frame(0x8002, 5, header), now=0.0)
+    out += dec.feed(_rdi_v12_frame(0x8100, 5, chunks[0]), now=0.0)
+    out += dec.feed(_rdi_v12_frame(0x8101, 5, chunks[1]), now=0.0)
+    assert len(out) == 1
+    assert dec.feed(_rdi_v12_frame(0x8002, 5, header), now=0.01) == []  # header B late
+    assert dec.assembler.late_messages == 1
+
+    scan = out[0]
+    assert scan["complete"] and scan["e2e_valid"]
+    assert scan["e2e_counter"] == 5
+    assert scan["chunk_count"] == 2 and scan["chunks_received"] == 2
+    assert scan["announced_detections"] == 30
+    assert scan["generation"] == INTERFACE_GEN_V1_2
+    hdr = streams.parse_rdi_frame(scan["payload"])
+    assert hdr["num_detections"] == 30 and hdr["message_counter"] == 1234
+    det = streams.parse_rdi_detection(scan["payload"], hdr["det_start"], 29)
+    assert det["detection_id"] == 29 and det["radial_distance"] == 30.0
+
+
+def test_rdi_v12_missing_chunk_closes_on_timeout():
+    header, chunks = _rdi_v12_scan(60)
+    dec = streams.RdiStreamDecoder()
+    dec.feed(_rdi_v12_frame(0x8002, 6, header), now=0.0)
+    dec.feed(_rdi_v12_frame(0x8100, 6, chunks[0]), now=0.0)
+    dec.feed(_rdi_v12_frame(0x8102, 6, chunks[2]), now=0.0)
+    assert dec.poll(now=0.05) == []
+    out = dec.poll(now=0.1)
+    assert len(out) == 1
+    scan = out[0]
+    assert not scan["complete"]
+    assert scan["chunks_received"] == 2 and scan["announced_detections"] == 60
+    hdr = streams.parse_rdi_frame(scan["payload"])
+    assert hdr["num_detections"] == 27 + 6
+    assert streams.parse_rdi_detection(scan["payload"], 36, 27)["detection_id"] == 54
+
+
+def test_rdi_v12_scan_without_header_is_dropped():
+    header, chunks = _rdi_v12_scan(30)
+    dec = streams.RdiStreamDecoder()
+    dec.feed(_rdi_v12_frame(0x8100, 7, chunks[0]), now=0.0)
+    out = dec.feed(_rdi_v12_frame(0x8002, 8, header), now=0.01)
+    assert out == []
+    assert dec.assembler.scans_without_header == 1
+
+
+def test_rdi_chunk_event_needs_interface_version_2():
+    _, chunks = _rdi_v12_scan(30)
+    dec = streams.RdiStreamDecoder()
+    assert dec.feed(_rdi_v12_frame(0x8100, 1, chunks[0], iface=0x01), now=0.0) == []
+    assert dec.poll(now=1.0) == []
+
+
+def test_rdi_decoder_keeps_the_legacy_single_message_format():
+    dec = streams.RdiStreamDecoder()
+    scans = []
+    for f in _legacy_frames("rdi_3frames.bin"):
+        scans += dec.feed(f, now=0.0)
+    assert len(scans) == 3
+    for i, scan in enumerate(scans):
+        assert scan["e2e_valid"] and scan["e2e_counter"] == i + 1
+        assert scan["chunk_count"] == 0 and scan["complete"]
+        assert scan["generation"] == INTERFACE_GEN_V1_0
+        assert streams.parse_rdi_frame(scan["payload"]) is not None
+
+
+def test_generation_from_if_version():
+    assert generation_from_if_version("1.2.0") == INTERFACE_GEN_V1_2
+    assert generation_from_if_version("1.1.0") == INTERFACE_GEN_V1_1
+    assert generation_from_if_version("") == 0
+    assert discovery_generation({"if_version": "1.2.0", "m72_x": 1}) == INTERFACE_GEN_V1_2
+    assert discovery_generation({"m72_x": 1}) == INTERFACE_GEN_V1_1
 
 
 if __name__ == "__main__":

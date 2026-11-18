@@ -9,7 +9,7 @@
 C++ and Python SDK for the bitsensing **AFI920 4D Imaging Radar**.  
 Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, the Config API with its access modes, and firmware update.
 
-> **Version 2.2.0**: tracks AFI920 interface v1.1.0 (firmware v3.1.1) and receives data from interface v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
+> **Version 2.2.0**: tracks AFI920 interface v1.2.0 and receives data from interface v1.1.0 (firmware v3.1.1) and v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
 
 > **bitsensing**: [bitsensing.com](https://bitsensing.com)
 
@@ -20,7 +20,7 @@ Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, the Co
 - Public C++ and Python SDK repository for AFI920 customer integration.
 - This README covers quick-start workflows for sensor discovery, data reception, sensor configuration, and firmware update.
 - Product manuals, interface specifications, and detailed installation/operation guides are provided separately.
-- Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) are supported for data only, in this release only. See [Firmware Compatibility](#firmware-compatibility).
+- Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) are supported for data only. Interface v1.2.0 sensors are supported, RDI header/chunk messages included. See [Firmware Compatibility](#firmware-compatibility).
 - The protocol interface headers under `third_party/afi920_interface/src/c` are vendored from interface v1.1.0.
 
 ---
@@ -283,25 +283,28 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 
 > **Note:** The default data stream transport is TCP: the host connects to the sensor at the stream port. Over UDP the host binds the stream port and accepts only datagrams whose source is `sensor_ip`. Set `stream_transport` globally, or use `rdi_transport`, `shi_transport`, and `spi_transport` as per-stream overrides; the value must match the protocol the sensor is configured to send (`GetNetworkConfig`). CSII uses UDP on interface v1.1.0 and TCP on v1.0.x. The SDK picks the CSII transport from the sensor's interface generation, and `csii_transport` overrides it.
 
-> **E2E Protection:** Every RDI/SHII/SPI/CSII message and every Config API request and response carries a 20-byte E2E header (CRC high 0, CRC-32, Length, Counter, Data ID; big-endian). The CRC covers the body only, and a zero CRC field never passes. The interface leaves the disposition of a failed check to the host (System Spec §7.5). By default the SDK logs a warning and delivers the frame with its verdict in `e2e_counter`, `e2e_checked`, and `e2e_valid` (`AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`). `validate_e2e` turns the data stream check on or off, and `e2e_strict = true` drops failing frames instead. A Config API response that fails the check is still returned, and `GetLastSensorResult().e2e_ok` holds its verdict. A sensor on interface v1.0.x puts a CRC-64/XZ over Length, Counter, Data ID and the body in the first 8 bytes. The SDK accepts it on receive and reports the sender in `generation`.
+> **E2E Protection:** Every RDI/SHII/SPI/CSII message and every Config API request and response carries a 20-byte E2E header (CRC high 0, CRC-32, Length, Counter, Data ID; big-endian). The CRC covers the body only, and a zero CRC field never passes. The interface leaves the disposition of a failed check to the host (Interface Overview §3.2.5). By default the SDK logs a warning and delivers the frame with its verdict in `e2e_counter`, `e2e_checked`, and `e2e_valid` (`AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`). `validate_e2e` turns the data stream check on or off, and `e2e_strict = true` drops failing frames instead. A Config API response that fails the check is still returned, and `GetLastSensorResult().e2e_ok` holds its verdict. A sensor on interface v1.0.x puts a CRC-64/XZ over Length, Counter, Data ID and the body in the first 8 bytes. The SDK accepts it on receive and reports the sender in `generation`.
 
 ---
 
 ## Firmware Compatibility
 
-This SDK release receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) as well as interface v1.1.0 (firmware 3.1.1). The Config API and the firmware update are interface v1.1.0 only. Support for v1.0.x ends with this release. bitsensing moves those sensors to firmware 3.1.1.
+The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0), v1.1.0 (firmware 3.1.1) and v1.2.0. The Config API and the firmware update are interface v1.1.0 and later.
 
-| Function | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
-|----------|-----------------------------|--------------------------------------|
-| Discovery | Supported | Supported |
-| RDI, SHII, SPI reception | Supported | Supported (E2E CRC-64/XZ accepted) |
-| CSII | UDP 30501 | TCP 30501 |
-| Config API | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
-| Firmware update | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
+| Function | Interface v1.2.0 | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
+|----------|------------------|-----------------------------|--------------------------------------|
+| Discovery | Supported (`if_version`) | Supported | Supported |
+| RDI reception | Header/chunk messages, one `AfiRdiFrame` per scan | One message per scan | One message per scan |
+| SHII, SPI reception | Supported | Supported | Supported (E2E CRC-64/XZ accepted) |
+| CSII | UDP 30501 | UDP 30501 | TCP 30501 |
+| Config API | Supported | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
+| Firmware update | Supported | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
 
-The SDK learns the generation from a read-only GetDeviceInfo request at the start of each Config API connection. With the Config API off, it learns it from the stream frames that pass the E2E check. `GetInterfaceGeneration()` (C++) and `interface_generation` (Python) report it. Discovery reports it per sensor in `AfiSensorInfo::generation` and the Python `_interface_generation` key. On a v1.0.x sensor the SDK closes the Config API connection after that request and returns every later Config API call without sending it. A v1.0.x sensor runs some v1.1.0 requests, such as Restart and ResetAllSettings, even though it cannot parse them.
+Interface v1.2.0 sends one RDI scan as header A, chunk messages and header B (SOME/IP Interface Version 0x02; Events `0x8002` and `0x8100` to `0x814B`, one E2E Data ID per Event). The SDK assembles them into one `AfiRdiFrame` per scan by the E2E Counter (Interface Overview §3.2.3), so an RDI callback receives the same frame from every generation. A scan with missing chunks is delivered with the detections that arrived: `chunk_count`, `chunks_received`, `announced_detections` and `IsComplete()` report it, and a scan without any header message is dropped. The payload callback receives every message with its `event_id` and `someip_interface_version`. Python receivers use `streams.RdiStreamDecoder`, which returns one single-message RDI payload per scan for `parse_rdi_frame`.
 
-The stream layouts are the same in both generations. The SDK passes every value through unchanged, and the fields below mean different things on v1.0.x. The Common Header interface version of the payload (`1.0.0` or `1.1.0`) tells the generations apart.
+The SDK learns the generation from a read-only GetDeviceInfo request at the start of each Config API connection; the `if_version` key in its answer marks v1.2.0 and later. With the Config API off, it learns it from the stream frames that pass the E2E check. `GetInterfaceGeneration()` (C++) and `interface_generation` (Python) report it. Discovery reports it per sensor in `AfiSensorInfo::generation` and the Python `_interface_generation` key. On a v1.0.x sensor the SDK closes the Config API connection after that request and returns every later Config API call without sending it. A v1.0.x sensor runs some v1.1.0 requests, such as Restart and ResetAllSettings, even though it cannot parse them.
+
+The stream layouts are the same in both generations. The SDK passes every value through unchanged, and the fields below mean different things on v1.0.x. The ISO23150 Header interface version of the payload (`1.0.0` or `1.1.0`) tells the generations apart.
 
 | Field | Interface v1.0.x | Interface v1.1.0 |
 |-------|------------------|------------------|
@@ -510,7 +513,7 @@ Wire-format data is represented via ISO 23150 C structures under `third_party/af
 
 | Structure | Description |
 |-----------|-------------|
-| `AfiRdiFrame` | RDI frame passed through SDK callbacks, with the E2E verdict (`e2e_counter`, `e2e_checked`, `e2e_valid`) and the sender's `generation` |
+| `AfiRdiFrame` | RDI frame passed through SDK callbacks, with the E2E verdict (`e2e_counter`, `e2e_checked`, `e2e_valid`), the sender's `generation` and, for interface v1.2.0, the chunk counts (`chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`) |
 | `bts_rdi_detection_t` | Individual detection (51 bytes) with position, velocity, and measurement errors |
 | `bts_shi_message_t` | Sensor health information (variable length) |
 | `bts_spi_message_t` | Sensor performance information |
@@ -519,7 +522,7 @@ Wire-format data is represented via ISO 23150 C structures under `third_party/af
 | `AfiVehicleInput` | Vehicle dynamics sent to the sensor via `SendVehicleInput` (CSII); `sensor_id` defaults to 1 |
 | `AfiModeStatus` | Access mode, time in the mode, and whether the data streams are halted |
 | `AfiSensorResult` | Radar outcome of the last Config API call |
-| `AfiInterfaceGeneration` | Interface generation of a sensor or frame: `kUnknown`, `kV1_0`, `kV1_1` |
+| `AfiInterfaceGeneration` | Interface generation of a sensor or frame: `kUnknown`, `kV1_0`, `kV1_1`, `kV1_2` |
 
 ### Key Fields in `bts_rdi_detection_t`
 

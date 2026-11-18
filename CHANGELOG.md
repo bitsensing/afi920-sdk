@@ -4,9 +4,10 @@ All notable changes to the AFI920 SDK will be documented in this file.
 
 ---
 
-## v2.2.0 — Interface v1.1.0
+## v2.2.0 — Interface v1.2.0 and v1.1.0
 
-Release tracking the AFI920 interface v1.1.0 (sensor firmware v3.1.1).
+Release tracking the AFI920 interface v1.2.0 and v1.1.0 (sensor firmware
+v3.1.1).
 **Breaking** — the E2E CRC, the Config API framing and parts of the
 public API change. Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0)
 remain supported for data reception in this release only.
@@ -29,9 +30,17 @@ remain supported for data reception in this release only.
   (`0x0044` / `0x0045`, `AfiDetectionDensity`) and `SaveConfig` (`0x0090`)
   with their Python wrappers and `METHOD_*` constants; `driver_hash` in
   `AfiDeviceInfo` and `AfiSensorInfo`.
-- **Detection filters** — eight toggles: `filter_ground_reflection` added,
-  `filter_fov` and `filter_aps_noise` removed; `filter_ground_sidelobe` and
-  `filter_structure_multipath` default on, `filter_wheel_microdoppler` off.
+- **Detection threshold** — `AfiDetectionThreshold::snr_dB` and the Python
+  `snr_db` argument are removed; the threshold methods carry the CFAR tables
+  only.
+- **Detection filters** — five toggles, matching the interface:
+  `filter_ground_sidelobe`, `filter_multibounce_2x`,
+  `filter_structure_multipath` and `filter_specular_mirror` (default on) and
+  `filter_ground_reflection` (new, default off). `filter_fov`,
+  `filter_aps_noise`, `filter_ego_specular`, `filter_upper_structure` and
+  `filter_wheel_microdoppler` are removed.
+- **Diagnostic info** — `m7_snapshot_stale` / `m7_stale_cycles` are
+  `status_snapshot_stale` / `status_stale_cycles` (C++ and Python).
 - **CSII over UDP** — on interface v1.1.0, `SendVehicleInput()` /
   `send_vehicle_input()` sends one UDP datagram per message to port 30501;
   `sensor_id` defaults to 1.
@@ -41,12 +50,29 @@ remain supported for data reception in this release only.
   the C++ values (`DISCONNECTED` -1 → -5, `TIMEOUT` -2 → -4,
   `PROTOCOL_ERROR` -3 → -7, `NOT_SUPPORTED` -9 → -10); Python argument
   checks return `INVALID_PARAM` and a failed `init()` `CONNECT_FAILED`.
-- **Defaults** — `AfiDetectionThreshold::snr_dB` 5.0 (was 12.0),
-  `AfiPtpConfig::priority1` / `priority2` 255 (was 128); `AfiRangeMode`
-  gains value 6, so exhaustive `switch` statements need a case.
+- **Defaults** — `AfiPtpConfig::priority1` / `priority2` 255 (was 128);
+  `AfiRangeMode` gains value 6, so exhaustive `switch` statements need a
+  case.
 
 ### Added
 
+- **Interface v1.2.0 RDI** — one scan arrives as header A, chunk messages
+  and header B (SOME/IP Interface Version 0x02, Events `0x8002` and `0x8100`
+  to `0x814B`). The SDK assembles them by E2E Counter into one `AfiRdiFrame`
+  per scan; `chunk_count`, `chunks_received`, `announced_detections` and
+  `IsComplete()` describe a partial scan, which keeps the detections that
+  arrived. Python: `parse_rdi_header_msg`, `parse_rdi_chunk`,
+  `RdiScanAssembler` and `RdiStreamDecoder`.
+- **Interface generation v1.2** — `AfiInterfaceGeneration::kV1_2` /
+  `INTERFACE_GEN_V1_2` from the Discovery and GetDeviceInfo `if_version` key
+  (`AfiSensorInfo::if_version`, `AfiDeviceInfo::if_version`) and from the
+  RDI framing.
+- **Fault log** — `GetFaultLog` (`0x0017`) and Python `get_fault_log()` read
+  up to 12 raw 128 B slots of the fault ring or the system information sample
+  ring in every access mode.
+- **VLAN ID of this boot** — `AfiDeviceInfo::vlan_id` and
+  `AfiSensorInfo::vlan_id`; `AfiNetworkConfig::vlan_id` stays the stored
+  value for the next boot.
 - **Access mode API** — `GetMode` / `SetMode` / `EnterMode` (`0x00E0` /
   `0x00E1`), Python `get_mode()` / `set_mode()` / `enter_mode()`,
   `AfiAccessMode` / `AccessMode` and `AfiModeStatus`.
@@ -92,17 +118,31 @@ remain supported for data reception in this release only.
   Client and Session ID; a timeout, lost connection or mismatch closes the
   socket and the next call reconnects. Request bodies above 16,384 B are
   refused before sending.
-- **Detection threshold** — `snr_threshold_db` is a level in 1..9;
-  `cfar_table_second_frame` exists only in DR and UDR
+- **Detection threshold** — the CFAR tables hold levels 1..9 per range
+  segment; `cfar_table_second_frame` exists only in DR and UDR
   (`has_cfar_table_second_frame`).
 - **Stream reception** — RDI loss counts gaps in the E2E Counter (one per
-  send slot) instead of MessageCounter; RDI holds up to 8192 detections
-  (was 4096); UDP receivers accept only datagrams from `sensor_ip`.
+  send cycle) instead of MessageCounter; single-message RDI (interface
+  v1.1.0 and v1.0.x) holds up to 8192 detections (was 4096); UDP receivers
+  accept only datagrams from `sensor_ip`.
 - **Discovery** — one collection window per call, deduplication by (source
-  IP, serial number), and `AfiSensorInfo::source_ip`.
+  IP, serial number), and `AfiSensorInfo::source_ip`. From interface v1.2.0
+  `range_mode` is the SHII SensorOperationMode with the access mode applied
+  (0 to 6, 10 Degradation, 20 Diagnostic, 21 Programming, 100 Fault, 200
+  Initialising), not the stored `GetRangeMode` value.
+- **Sensor answers** — `kBusy` also covers a `GetFaultLog` flash job and any
+  NVM-writing method within 3 s of boot. `AfiPtpConfig::state` is the PTP
+  port state, not the lock verdict (SHII SensorTimeSync reports lock);
+  `grid_offset_ns` is the radiate and send grid minus system time, and stream
+  timestamps do not carry it.
+- **Firmware update** — Python `upload_component()` aborts a session that a
+  refused `FirmwareUpdateStart` left in `error`; `FirmwareUpdateStatus` may
+  report `"initializing"`.
 - **Interface headers** — vendored under `third_party/afi920_interface/src/c`
-  and updated to interface v1.1.0 (CRC-32 helpers in `bts_iso23150_e2e.h`,
-  `BTS_RDI_MAX_DETECTIONS` 8192); no extra checkout step is needed.
+  and updated to interface v1.2.0 (CRC-32 helpers in `bts_iso23150_e2e.h`,
+  `BTS_RDI_MAX_DETECTIONS` 2048 per v1.2.0 scan; the single-message RDI of
+  v1.1.0 and v1.0.x keeps `BTS_RDI_LEGACY_MAX_DETECTIONS` 8192); no extra
+  checkout step is needed.
 - **Examples** — Python `sample_config.py` writes only with `--write`;
   `sample_multi_sensor.py`, `set_yaw_90.py` and the C++
   `set_stream_destination` enter the Diagnostic mode, restart and
@@ -123,6 +163,10 @@ remain supported for data reception in this release only.
 - A second sensor sending to the same UDP port mixed into the stream.
 - Discovery could overrun its timeout and stopped at a Windows ICMP reset.
 - `sample_discovery` failed to link on MinGW (`iphlpapi`).
+- `Stop()` hung while a TCP stream stayed connected but sent nothing.
+- `Stop()` could crash a receive thread on Windows: it closed the socket
+  under a blocked receive. It now wakes each thread, joins it and closes the
+  socket afterwards.
 
 ---
 

@@ -11,7 +11,6 @@ SPDX-License-Identifier: BSD-3-Clause
 """
 
 import json
-import math
 import socket
 import time
 from dataclasses import dataclass
@@ -47,6 +46,7 @@ from afi_sdk.someip import (
     METHOD_RESTART,
     METHOD_RESET_ALL_SETTINGS,
     METHOD_GET_COMMAND_HISTORY,
+    METHOD_GET_FAULT_LOG,
     METHOD_GET_NETWORK_CONFIG,
     METHOD_SET_NETWORK_CONFIG,
     METHOD_GET_RANGE_MODE,
@@ -120,7 +120,7 @@ class AccessMode:
 
     Entry is one way, NORMAL -> DIAGNOSTIC -> PROGRAMMING; only a reboot
     returns to NORMAL. DIAGNOSTIC opens every config SET; PROGRAMMING opens
-    the firmware update chain and halts RDI/SHII/SPI.
+    the firmware update chain and halts the data streams.
     """
     NORMAL = 0
     DIAGNOSTIC = 1
@@ -360,6 +360,7 @@ class AfiSdk:
                 pass
         self._csii_sock = None
 
+
     # ── Access Mode (0x00Ex) ──
 
     def get_mode(self) -> Optional[dict]:
@@ -407,7 +408,8 @@ class AfiSdk:
     # ── Device Info & Status (0x001x) ──
 
     def get_device_info(self) -> Optional[dict]:
-        """Get device info (serial, model, hw/software version, component hashes, MAC)."""
+        """Get device info (serial, MAC, vlan_id of this boot, model,
+        hw/software version, component hashes)."""
         return self._get(METHOD_GET_DEVICE_INFO)
 
     def get_sensor_status(self) -> Optional[dict]:
@@ -429,6 +431,23 @@ class AfiSdk:
     def get_command_history_info(self) -> Optional[dict]:
         """Get command history counters (total/success/fail)."""
         return self._get(METHOD_GET_COMMAND_HISTORY)
+
+    def get_fault_log(self, ring: str = "fault", slot: int = 0,
+                      count: int = 12) -> Optional[dict]:
+        """GetFaultLog (0x0017): ``count`` (1..12) raw 128 B slots of the
+        ``"fault"`` ring (1024 slots) or the ``"sample"`` ring (512 slots)
+        from ``slot`` on, as {ring, slots, head, boot_count, slot, records}.
+        Each record is 256 lowercase hex digits and unchecked; the caller
+        checks magic, seq and crc32 and orders by seq. BUSY means a flash job
+        was in progress; retry."""
+        if (ring not in ("fault", "sample")
+                or any(isinstance(v, bool) or not isinstance(v, int)
+                       for v in (slot, count))
+                or slot < 0 or not 1 <= count <= 12):
+            self._invalid()
+            return None
+        return self._get_with_payload(
+            METHOD_GET_FAULT_LOG, {"ring": ring, "slot": slot, "count": count})
 
     # ── Network (0x002x) ──
 
@@ -480,14 +499,9 @@ class AfiSdk:
     # ── Detection (0x004x) ──
 
     def get_detection_threshold(self) -> Optional[dict]:
-        """Get detection thresholds (snr_threshold_db, cfar_table_*)."""
+        """Get the CFAR level tables (cfar_table_*) of the stored range mode."""
         data = self._get(METHOD_GET_DETECTION_THRESHOLD)
         if data is None:
-            return None
-        snr = data.get("snr_threshold_db")
-        if (isinstance(snr, bool) or not isinstance(snr, (int, float)) or
-                not math.isfinite(snr) or snr < 1 or snr > 9):
-            self._last_error = PROTOCOL_ERROR
             return None
         first = _normalize_cfar_table(data.get("cfar_table_first_frame"))
         if first is None:
@@ -504,19 +518,12 @@ class AfiSdk:
 
     def set_detection_threshold(
         self,
-        snr_db: Optional[float] = None,
         cfar_table_first_frame: Optional[List[int]] = None,
         cfar_table_second_frame: Optional[List[int]] = None,
     ) -> int:
-        """Set the SNR threshold level (1..9, fractions kept) and/or the
-        19-level CFAR tables. The second-frame table applies in DR and UDR."""
+        """Set the 19-level CFAR tables (1..9) of the stored range mode. The
+        second-frame table applies in DR and UDR."""
         payload = {}
-        if snr_db is not None:
-            if (isinstance(snr_db, bool) or not isinstance(snr_db, (int, float)) or
-                    not math.isfinite(snr_db) or snr_db < 1 or snr_db > 9):
-                return self._invalid()
-            payload["snr_threshold_db"] = snr_db
-
         if cfar_table_first_frame is not None:
             levels = _normalize_cfar_table(cfar_table_first_frame)
             if levels is None:
@@ -532,16 +539,15 @@ class AfiSdk:
         return self._set(METHOD_SET_DETECTION_THRESHOLD, payload)
 
     def get_detection_filters(self) -> Optional[dict]:
-        """Get the eight v1.1.0 detection filter toggles (filter_ego_specular, ...)."""
+        """Get the five detection filter toggles (filter_ground_sidelobe, ...)."""
         return self._get(METHOD_GET_DETECTION_FILTERS)
 
     def set_detection_filters(self, **filters) -> int:
         """Set detection filter toggles (any subset).
 
-        Keyword fields: filter_ego_specular, filter_ground_sidelobe,
-        filter_upper_structure, filter_multibounce_2x,
+        Keyword fields: filter_ground_sidelobe, filter_multibounce_2x,
         filter_structure_multipath, filter_specular_mirror,
-        filter_wheel_microdoppler, filter_ground_reflection. The SET requires
+        filter_ground_reflection. The SET requires
         the diagnostic access mode, is written to NVM, and applies after a
         restart.
         """

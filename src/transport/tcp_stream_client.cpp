@@ -211,8 +211,26 @@ int TcpStreamClient::Receive(std::vector<uint8_t>& frame,
     return static_cast<int>(total);
 }
 
-void TcpStreamClient::Close() {
+void TcpStreamClient::Shutdown() {
     running_.store(false);
+    if (socket_ != kInvalidSocket) {
+        // close() alone does not wake a thread blocked in recv() on Linux;
+        // shutdown() makes that recv() return so Stop() can join the receive
+        // thread while a connected sensor sends nothing.
+#ifdef _WIN32
+        ::shutdown(socket_, SD_BOTH);
+        // shutdown() does not wake a blocked recv() on Windows either.
+        // Cancelling the pending receive completes it before recv() returns,
+        // unlike closesocket() under the call.
+        ::CancelIoEx(reinterpret_cast<HANDLE>(socket_), nullptr);
+#else
+        ::shutdown(socket_, SHUT_RDWR);
+#endif
+    }
+}
+
+void TcpStreamClient::Close() {
+    Shutdown();
     open_.store(false);
     if (socket_ != kInvalidSocket) {
         platform_close_socket(socket_);

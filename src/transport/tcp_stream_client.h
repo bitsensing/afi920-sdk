@@ -59,8 +59,8 @@ public:
      * @brief Receive one complete SOME/IP message into a dynamically sized buffer
      *
      * The frame size is taken from the SOME/IP Length field.  This keeps stream
-     * reception independent of the currently compiled RDI/SHII/SPI/Raw
-     * Data domain schema.  max_frame_size is only a transport memory-safety
+     * reception independent of the currently compiled stream domain
+     * schemas.  max_frame_size is only a transport memory-safety
      * ceiling; it is not a typed payload limit.
      *
      * @param frame          Output buffer, resized to the complete frame
@@ -73,6 +73,14 @@ public:
      * @brief Close the TCP connection
      */
     void Close();
+
+    /**
+     * @brief Wake a thread blocked in Receive() without closing the socket
+     *
+     * Stop() calls this before joining the receive thread and Close() after
+     * it, so the socket is never closed under a pending recv().
+     */
+    void Shutdown();
 
     bool IsOpen() const { return open_.load(); }
 

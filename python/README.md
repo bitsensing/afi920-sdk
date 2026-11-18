@@ -108,7 +108,7 @@ else:
 
 Data stream parsing helpers (20B E2E header with CRC-32, bounded SOME/IP-TP, and
 ISO 23150 RDI/SHII/SPI) live in `afi_sdk.streams`. `parse_shi()` and `parse_spi()`
-return the whole Common Header, including `data_qualifier`. See
+return the whole ISO23150 Header, including `data_qualifier`. See
 `examples/sample_data_stream.py`.
 
 ## Examples

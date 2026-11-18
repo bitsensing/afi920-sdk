@@ -2,39 +2,37 @@
  * @file bts_iso23150_e2e.h
  * @brief E2E communication protection header (20B, CRC-32)
  *
- * Authoritative spec: docs/04_Data_Stream/10_E2E_Protection.md
+ * Authoritative spec: Interface Overview section 3.2 (docs/00_Interface_Overview.md)
  *
  * Scope: RDI / SHII / SPI / CSII / Config API.
- * Excluded: Discovery (UDP 30520) and System Log (UDP 30515, no SOME/IP
+ * Excluded: Discovery (UDP 30520) and System Log (UDP, no SOME/IP
  * framing, so there is no place to carry the header).
  *
  * The 20B header sits between the SOME/IP header and the body. All fields are
- * Big-endian, unlike the LE ISO23150 payload. The field layout follows AUTOSAR
- * E2E Profile 7, but the CRC is CRC-32 rather than Profile 7's CRC-64/XZ, so
- * this is NOT an AUTOSAR-conformant profile - 10_E2E_Protection.md is the spec.
+ * Big-endian, unlike the LE ISO23150 payload. The field layout is based on AUTOSAR
+ * E2E Profile 7 and the CRC is IEEE 802.3 CRC-32 in place of Profile 7's
+ * CRC-64/XZ. The E2E rules are in Interface Overview section 3.2.
  *
  *   offset  size  field
  *     0      4    CRC high   = 0x00000000 (kept so a CRC-64 widening does not
  *                              move any field)
  *     4      4    CRC-32     over the body only
  *     8      4    Length     body byte count
- *    12      4    Counter    sequence counter (rules: System Spec 7.3, 8.2)
+ *    12      4    Counter    sequence counter (rules: Interface Overview 3.2.3)
  *    16      4    Data ID    masquerade guard
  *
  * CRC: IEEE 802.3 CRC-32 (zlib, Ethernet FCS). poly 0x04C11DB7 (reflected
  *   0xEDB88320), reflected input and output, init 0xFFFFFFFF, final XOR
  *   0xFFFFFFFF. KAT: crc("123456789") = 0xCBF43926. Any zlib/binascii crc32
- *   reproduces it. The S32R45 DMA_CRC computes it with CTL[POLY_SEL] = 0000b
- *   and GEC[SWAP_BIT] (input bit reflection); the sender reflects the output
- *   (RBIT) and applies the final XOR in software.
+ *   reproduces it.
  *
- * Protected region = the body only. The header's own 20B are not covered,
- * because the hardware path processes one contiguous address range. Length,
- * Counter and Data ID are checked by value consistency instead (Phase 2).
+ * Protected region = the body only. The header's own 20B are not covered;
+ * Length, Counter and Data ID are checked by value consistency.
  *
- * Phase 1 (current): the sender computes the CRC over the body and increments
- *   the counter. Receivers do not verify yet.
- *   - Phase 2 (future): receiver verification + state machine (E2E_SM).
+ * Phase 1 (current): the sender fills the header and the CRC. A receiver may
+ *   judge each message on its own (Data ID, Length, CRC).
+ * Phase 2: E2E state machine, counter gap tolerance and an enforced
+ *   disposition on the receiver side (Interface Overview section 3.2.5).
  */
 
 #ifndef BTS_ISO23150_E2E_H
@@ -67,11 +65,11 @@ extern "C" {
 #define BTS_E2E_CRC32_KAT               (0xCBF43926u)  /* crc("123456789") */
 
 /* E2E Data ID = Service ID 0x6000 in the high half, the channel's own
- * identifier in the low half. Registry: 10_E2E_Protection.md 5. */
+ * identifier in the low half. Registry: Interface Overview section 3.2.4. */
 #define BTS_E2E_DATA_ID(sub16)          (0x60000000u | ((uint32_t)(sub16) & 0xFFFFu))
 
 #define BTS_E2E_DATA_ID_CSII            (0x60008001u)
-#define BTS_E2E_DATA_ID_RDI             (0x60008002u)
+#define BTS_E2E_DATA_ID_RDI             (0x60008002u)  /* RDI header A and header B; chunk k uses BTS_E2E_DATA_ID(0x8100 + k) */
 #define BTS_E2E_DATA_ID_SHII            (0x60008003u)
 #define BTS_E2E_DATA_ID_SPI             (0x60008004u)
 
@@ -86,12 +84,12 @@ extern "C" {
  * first call passes BTS_E2E_CRC32_INIT (0). Chained calls give the same value
  * as one call over the concatenation, with no separate finalize step.
  *
- * The table is 16 entries (64B) rather than the usual 256 entries (1KB): M7_2
- * runs from SRAM and that kilobyte is a real share of its budget, so each byte
- * costs two lookups instead of one. Bodies here are kilobytes, not megabytes.
+ * The table is 16 entries (64B) rather than the usual 256 entries (1KB) to
+ * keep the footprint small on SRAM-only targets; each byte costs two lookups
+ * instead of one. Bodies here are kilobytes, not megabytes.
  *
  * @note On a -O0 translation unit this loop is slow enough to matter (164
- *   cycles/byte measured on M7_2). Callers in such projects wrap it in a leaf
+ *   cycles/byte measured on a Cortex-M7). Callers in such projects wrap it in a leaf
  *   function carrying __attribute__((optimize("O2"))).
  */
 static inline uint32_t bts_e2e_crc32_update(uint32_t crc,
@@ -139,7 +137,7 @@ static inline uint32_t bts_e2e_crc32(const uint8_t* p, size_t n)
  *
  * @param out       Output buffer, must be at least BTS_E2E_HEADER_SIZE bytes.
  * @param data_id   E2E Data ID (BTS_E2E_DATA_ID_* or BTS_E2E_DATA_ID()).
- * @param counter   E2E sequence counter. The caller owns its rule (System Spec 7.3, 8.2).
+ * @param counter   E2E sequence counter. The caller owns its rule (Interface Overview 3.2.3).
  * @param body_len  Length of the body that follows the header.
  * @return BTS_E2E_HEADER_SIZE on success, or negative error code.
  */

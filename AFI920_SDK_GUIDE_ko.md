@@ -305,7 +305,7 @@ if (sdk.Init(cfg) == afi::kOk) sdk.Start();
 | `(const AfiRdiFrame&)` | RDI 프레임마다(`e2e_counter`, `e2e_checked`, `e2e_valid`, `generation` 포함) |
 | `(const AfiShiMessage&)` / `(const AfiShiMessage&, const AfiStreamMeta&)` | SHII 메시지마다. 두 오버로드를 모두 등록하면 `AfiStreamMeta` 오버로드만 호출한다 |
 | `(const AfiSpiMessage&)` / `(const AfiSpiMessage&, const AfiStreamMeta&)` | SPI 메시지마다(SHII와 같은 규칙) |
-| `(uint32_t total, uint32_t lost)` | RDI E2E Counter(송신 슬롯)의 공백 발견 시점(누적값 전달) |
+| `(uint32_t total, uint32_t lost)` | RDI E2E Counter(송신 주기)의 공백 발견 시점(누적값 전달) |
 | `RegWirePayloadCallback(const AfiWirePayloadFrame&)` | E2E 검증 이후, 타입별 파서 이전의 모든 RDI, SHII, SPI payload |
 
 > **콜백 스레드와 데이터 수명**
@@ -313,7 +313,7 @@ if (sdk.Init(cfg) == afi::kOk) sdk.Start();
 > - 프레임 또는 메시지 참조는 callback 실행 중에만 유효하다. `AfiRdiFrame` 전체를 복사하는 것은 안전하다. 복사본은 자체 detection 벡터를 소유하며 `message.detections`를 다시 바인딩한다. `detections_storage`의 크기를 직접 바꾸거나 교체한 뒤에는 `RebindStorage()`를 호출한다.
 > - E2E 검증 실패는 로그로 기록하며, 프레임은 `e2e_valid = false`와 함께 그대로 전달한다. `e2e_strict = true`이면 callback 실행 전에 폐기한다.
 > - 타입별 callback은 타입별 파서가 payload를 수락한 경우에만 실행된다. wire payload callback은 같은 스레드에서 먼저 실행된다.
-> - loss callback은 E2E 검증을 통과한 프레임의 E2E Counter 공백을 센다. 공백에는 레이더가 이 호스트로 보내지 않은 슬롯도 포함된다. 부팅 후 첫 scan 이전의 슬롯과 TCP 연결이 적체된 동안의 슬롯이 이에 해당한다. Counter가 감소하면(레이더 재시작) 새 기준점에서 다시 센다.
+> - loss callback은 E2E 검증을 통과한 프레임의 E2E Counter 공백을 센다. 공백에는 레이더가 이 호스트로 보내지 않은 송신 주기도 포함된다. 부팅 후 첫 scan 이전의 송신 주기와 TCP 연결이 적체된 동안의 송신 주기가 이에 해당한다. Counter가 감소하면(레이더 재시작) 새 기준점에서 다시 센다.
 > - TCP 스트림은 연결이 끊기면 1초에서 최대 30초까지 늘어나는 backoff 간격으로 재연결한다. UDP 수신기는 `sensor_ip`에서 온 datagram만 수신한다.
 > - Config API 호출과 `SendVehicleInput()`은 호출자 스레드에서 동기 방식으로 실행된다. Config API 호출은 내부에서 직렬화되지만 `GetLastSensorResult()`는 마지막으로 끝난 호출의 결과를 담으므로, Config API는 한 스레드에서 호출한다. `SendVehicleInput()`은 별도의 주기 스레드에서 실행할 수 있다.
 
@@ -325,8 +325,8 @@ Python SDK에는 스트리밍 callback이 없다. RDI(30509), SHII(30510), SPI(3
 |------|------|
 | `strip_e2e(frame, validate=True, expected_data_id=None)` | `(e2e, body)`. `e2e`는 `length_ok`, `data_id_ok`, `crc_zero`, `crc_ok`, `ok`, `generation`을 담는다 |
 | `parse_rdi_frame(payload)` / `parse_rdi_detection(payload, det_start, index)` | RDI 헤더 dict / detection 1개의 dict |
-| `parse_shi(payload)` | Common Header와 `operation_modes`, `defect_recognised`, `defect_reason`, `supply_voltage_status`, `temperature_status`, `input_signal_types`, `input_signal_statuses`, `time_sync`, `calibration_components`, `calibration_statuses`, `calibration_states` |
-| `parse_spi(payload)` | Common Header와 `vehicle_coord_system`, `pose`, `fov_segments`, `recognisable_object_types`, `reference_target_types` |
+| `parse_shi(payload)` | ISO23150 Header와 `operation_modes`, `defect_recognised`, `defect_reason`, `supply_voltage_status`, `temperature_status`, `input_signal_types`, `input_signal_statuses`, `time_sync`, `calibration_components`, `calibration_statuses`, `calibration_states` |
+| `parse_spi(payload)` | ISO23150 Header와 `vehicle_coord_system`, `pose`, `fov_segments`, `recognisable_object_types`, `reference_target_types` |
 | `SomeipTpReassembler(max_payload_size, max_sessions=8, max_segment_size=1392)` | UDP SOME/IP-TP 재조립, `feed(tp_header, payload, session_id)` |
 
 `expected_data_id`에는 `E2E_DATA_ID_RDI`, `E2E_DATA_ID_SHII`, `E2E_DATA_ID_SPI`를 지정한다. `python/examples/sample_data_stream.py`는 이 처리를 TCP와 UDP 공용 `StreamReceiver` 클래스로 구현한다.
@@ -370,7 +370,7 @@ Python SDK에는 스트리밍 callback이 없다. RDI(30509), SHII(30510), SPI(3
 | 레이더 네트워크와 전체 스트림 목적지 | `SetNetworkConfig`(전체 갱신) | `set_network_config(**fields)`(부분 갱신) | 항상 `true` |
 | 스트림 목적지 1개 | `SetStreamDestination` | `set_stream_destination` | |
 | 범위 모드 | `SetRangeMode` | `set_range_mode` | 항상 `true` |
-| SNR 레벨과 CFAR 테이블 | `SetDetectionThreshold` | `set_detection_threshold` | |
+| CFAR 테이블 | `SetDetectionThreshold` | `set_detection_threshold` | |
 | 감지 필터 | `SetDetectionFilters` | `set_detection_filters` | |
 | PTP 프로파일 | `SetPtpConfig` | `set_ptp_config` / `set_ptp_config_with_result` | 저장된 프로파일이 동작 중인 프로파일과 다를 때 `true` |
 | 장착 위치, 회전, 위치 코드 | `SetMountingPosition`, `SetRotation`, `SetSensorPosition` | `set_mounting_position`, `set_rotation`, `set_sensor_position` | |
@@ -410,7 +410,7 @@ elif sdk.set_range_mode(RangeMode.LONG_RANGE) == OK:
 
 ## 8. Configuration API
 
-Config API는 데이터 스트림과 독립된 자체 TCP 연결(포트 30500)로 동작하며, 모든 호출은 동기 방식이다. 레이더는 Config API 클라이언트를 한 번에 하나만 받으며, 초당 200건을 넘는 요청에는 `BUSY`로 응답한다.
+Config API는 데이터 스트림과 독립된 자체 TCP 연결(포트 30500)로 동작하며, 모든 호출은 동기 방식이다. 레이더는 Config API 클라이언트를 한 번에 하나만 받으며, 초당 200건을 넘는 요청에는 `BUSY`로 응답한다. 기동 뒤 저장된 설정을 판독하는 동안(최대 3초)에는 NVM에 기록하는 메서드(`SetMode`를 제외한 `SET`과 `ResetAllSettings`)에도 `BUSY`로 응답한다.
 
 | 항목 | C++ | Python |
 |------|-----|--------|
@@ -432,7 +432,7 @@ cfg.enable_rdi = false;                          // Config API only
 afi::AfiSdk sdk;
 if (sdk.Init(cfg) != afi::kOk) return 1;
 
-afi::AfiDeviceInfo info;                         // serial, model, HW/SW version, hashes, MAC
+afi::AfiDeviceInfo info;                         // serial, model, HW/SW version, hashes, MAC, VLAN ID
 if (sdk.GetDeviceInfo(info) == afi::kOk)
     printf("Serial: %s  SW: %s\n", info.serial_number.c_str(), info.software_version.c_str());
 
@@ -441,7 +441,7 @@ afi::AfiDiagnosticInfo diag;       sdk.GetDiagnosticInfo(diag);      // combined
 afi::AfiNetworkConfig net;         sdk.GetNetworkConfig(net);        // radar network + stream destinations
 afi::AfiDetectionThreshold thresh; sdk.GetDetectionThreshold(thresh);
 afi::AfiDetectionFilters filters;  sdk.GetDetectionFilters(filters);
-afi::AfiPtpConfig ptp;             sdk.GetPtpConfig(ptp);            // profiles + live sync status
+afi::AfiPtpConfig ptp;             sdk.GetPtpConfig(ptp);            // profiles + PTP port state
 afi::AfiModeStatus mode_status;    sdk.GetMode(mode_status);
 
 afi::AfiRangeMode mode;
@@ -530,14 +530,13 @@ sdk.close()
 ### 감지 튜닝
 
 ```cpp
-// C++: SNR level and 19-entry CFAR tables (levels 1..9, not physical dB)
+// C++: 19-entry CFAR tables (levels 1..9) of the stored range mode
 afi::AfiDetectionThreshold thresh;
 sdk.GetDetectionThreshold(thresh);
-thresh.snr_dB = 6.0f;                            // wire key snr_threshold_db; fractions allowed
 thresh.cfar_table_first_frame.assign(afi::AfiDetectionThreshold::kCfarTableLength, 5);
 sdk.SetDetectionThreshold(thresh);               // second-frame table is used in DR and UDR only
 
-// Eight filter toggles; the SDK sends all eight
+// Five filter toggles; the SDK sends all five
 afi::AfiDetectionFilters filters;
 sdk.GetDetectionFilters(filters);
 filters.filter_ground_reflection = true;
@@ -546,27 +545,22 @@ sdk.SetDetectionFilters(filters);
 ```
 
 ```python
-# Python (any subset; values outside 1..9 or tables not of 19 entries give INVALID_PARAM)
-sdk.set_detection_threshold(snr_db=6.0, cfar_table_first_frame=[5] * 19)
+# Python (any subset; levels outside 1..9 or tables not of 19 entries give INVALID_PARAM)
+sdk.set_detection_threshold(cfar_table_first_frame=[5] * 19)
 sdk.set_detection_filters(filter_ground_reflection=True, filter_multibounce_2x=True)
 ```
 
 | 필터 | 기본값 |
 |------|--------|
-| `filter_ego_specular` | `false` |
 | `filter_ground_sidelobe` | `true` |
-| `filter_upper_structure` | `false` |
 | `filter_multibounce_2x` | `true` |
 | `filter_structure_multipath` | `true` |
 | `filter_specular_mirror` | `true` |
-| `filter_wheel_microdoppler` | `false` |
-| `filter_ground_reflection` | `false` (SR subcycle) |
-
-FW v3.1.1은 SNR 레벨을 저장하지만 감지에는 사용하지 않는다. `filter_ego_specular`, `filter_upper_structure`, `filter_wheel_microdoppler`도 저장만 하며 해당 처리 단계를 구성하지 않는다.
+| `filter_ground_reflection` | `false` |
 
 ### 시간 동기 (PTP)
 
-`SetPtpConfig(profile)` / `SetPtpConfig(profile, &restart_required)`는 `0`(gPTP), `1`(1588v2-L2), `2`(1588v2-UDP) 중 하나를 저장하며, 2를 넘는 값은 `kInvalidParam`을 반환한다. `GetPtpConfig`는 동작 중인 `profile`, 저장된 `configured_profile`, `restart_required`, 실시간 `state`(`"INIT"`, `"SLAVE"`, `"NOT_SYNCED"`), `offset_ns`, `mean_path_delay_ns`, `master_clock_id`, 그리고 시스템 시간과 PTP 시간의 차이를 나타내는 `grid_offset_ns` / `grid_state`를 반환한다. Python에서는 `get_ptp_config()`, `set_ptp_config(profile=0)`, `set_ptp_config_with_result(profile=0)`을 사용한다.
+`SetPtpConfig(profile)` / `SetPtpConfig(profile, &restart_required)`는 `0`(gPTP), `1`(1588v2-L2), `2`(1588v2-UDP) 중 하나를 저장하며, 2를 넘는 값은 `kInvalidParam`을 반환한다. `GetPtpConfig`는 동작 중인 `profile`, 저장된 `configured_profile`, `restart_required`, PTP 포트 상태 `state`(`"INIT"`, `"SLAVE"`, `"NOT_SYNCED"`, lock 판정은 SHII SensorTimeSync가 보고한다), `offset_ns`, `mean_path_delay_ns`, `master_clock_id`, 그리고 방사·송출 격자와 시스템 시각의 차이를 나타내는 `grid_offset_ns` / `grid_state`를 반환한다. 스트림 Timestamp는 시스템 시각(PHC)이며 격자 offset을 포함하지 않는다. Python에서는 `get_ptp_config()`, `set_ptp_config(profile=0)`, `set_ptp_config_with_result(profile=0)`을 사용한다.
 
 ### 전체 Config API 메서드 카탈로그
 
@@ -574,7 +568,7 @@ FW v3.1.1은 SNR 레벨을 저장하지만 감지에는 사용하지 않는다. 
 |------------------|-----|--------|
 | 연결(SDK 측) | `GetLastSensorResult`, `GetInterfaceGeneration`, `ReconnectConfigApi` | `last_error`, `last_result`, `interface_generation`, `reconnect`, `close`, `connected` |
 | Access Mode (`0x00E0`–`0x00E1`) | `GetMode`, `SetMode`, `EnterMode` | `get_mode`, `set_mode`, `enter_mode` |
-| Device & Status (`0x0010`–`0x0016`) | `GetDeviceInfo`, `GetSensorStatus`, `GetDiagnosticInfo`, `Restart`, `ResetAllSettings`, `GetCommandHistoryInfo` | `get_device_info`, `get_sensor_status`, `get_diagnostic_info`, `restart`, `reset_all_settings`, `get_command_history_info` |
+| Device & Status (`0x0010`–`0x0017`) | `GetDeviceInfo`, `GetSensorStatus`, `GetDiagnosticInfo`, `Restart`, `ResetAllSettings`, `GetCommandHistoryInfo`, `GetFaultLog` | `get_device_info`, `get_sensor_status`, `get_diagnostic_info`, `restart`, `reset_all_settings`, `get_command_history_info`, `get_fault_log` |
 | Network (`0x0020`–`0x0021`) | `GetNetworkConfig`, `SetNetworkConfig`, `SetStreamDestination` | `get_network_config`, `set_network_config`, `set_stream_destination` |
 | Range Mode (`0x0030`–`0x0031`) | `GetRangeMode`, `SetRangeMode` | `get_range_mode`, `set_range_mode` |
 | Detection (`0x0040`–`0x0043`) | `GetDetectionThreshold`, `SetDetectionThreshold`, `GetDetectionFilters`, `SetDetectionFilters` | `get_detection_threshold`, `set_detection_threshold`, `get_detection_filters`, `set_detection_filters` |
@@ -851,10 +845,11 @@ for s in AfiSdk.discover(timeout_s=3.0, bind_ip="192.168.10.100"):
 | `bootloader_hash`, `fw_hash` | 동작 중인 이미지의 git short hash |
 | `ip`, `source_ip` | 센서가 보고한 주소(없으면 `source_ip`) / 응답을 보낸 주소 |
 | `subnet_mask`, `gateway`, `port` | 레이더 네트워크(`port`는 Config API 포트 30500) |
+| `vlan_id` | 현재 기동에 적용 중인 VLAN ID(0은 VLAN 미사용) |
 | `detection_port`, `health_port`, `performance_port` | RDI / SHII / SPI 포트 |
 | `detection_protocol`, `health_protocol`, `performance_protocol` | `"tcp"` 또는 `"udp"` |
 | `detection_ip`, `health_ip`, `performance_ip`, `host_ip` | 스트림 목적지 IP |
-| `range_mode`, `range_mode_name` | 저장된 범위 모드 |
+| `range_mode`, `range_mode_name` | 현재 접근 모드를 적용한 SHII SensorOperationMode이다. `0`..`6`은 동작 중인 거리 모드, `10`은 Degradation, `20`은 Diagnostic, `21`은 Programming, `100`은 Fault, `200`은 Initialising이다. `GetRangeMode` 저장값이 아니다 |
 | `position_code`, `offset_x/y/z`, `yaw_deg`, `pitch_deg`, `roll_deg` | 장착 값 |
 | `radar_active`, `scan_index`, `uptime_seconds` | 동작 상태, 현재 MessageCounter, uptime(초) |
 | `ptp_state`, `ptp_offset_ns` | PTP 상태 |
@@ -927,7 +922,9 @@ for idx, ip in enumerate(["192.168.10.150", "192.168.10.151"]):
 
 ## 13. 인터페이스 v1.0.x 호환
 
-SDK 2.2.0은 인터페이스 v1.1.0(펌웨어 3.1.1) 센서와 함께 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0에서만 동작한다. v1.0.x 지원은 이번 릴리스로 종료한다.
+SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v1.2.0 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0 이후에서 동작한다.
+
+인터페이스 v1.2.0은 RDI 스캔 하나를 헤더 A, 묶음 메시지, 헤더 B로 나누어 송신한다(SOME/IP Interface Version 0x02, Event `0x8002`와 `0x8100`~`0x814B`, Event마다 별도 E2E Data ID). SDK는 E2E Counter를 기준으로 이 메시지를 스캔 하나의 `AfiRdiFrame`으로 조립한다(Interface Overview §3.2.3). 따라서 RDI 콜백은 모든 세대에서 같은 형식의 프레임을 받는다. 묶음이 빠진 스캔은 도착한 검출만으로 전달하며, `chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`가 그 상태를 표시한다. 헤더 메시지를 하나도 받지 못한 스캔은 폐기한다. payload 콜백은 모든 메시지를 `event_id`, `someip_interface_version`과 함께 받는다. Python 수신부는 `streams.RdiStreamDecoder`를 사용하며, 이 클래스는 스캔마다 `parse_rdi_frame`으로 해석하는 단일 메시지 형식 RDI payload를 반환한다.
 
 | 기능 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
 |------|------------------------------|-------------------------------------|
@@ -942,11 +939,12 @@ SDK가 세대를 판정하는 방식은 다음과 같다.
 
 - Config API 연결은 매번 읽기 전용 GetDeviceInfo 요청으로 시작한다. v1.0.x 응답이 오면 연결을 닫고, 다음 연결 전까지 이후의 Config API 호출은 송신 없이 `kNotSupported`를 반환한다. 이때 `GetLastSensorResult()`는 `NOT_SUPPORTED`와 `error_message`를 담으며, Python `connected`는 `False`이다.
 - Config API를 끈 구성에서는 E2E 검증을 통과한 마지막 스트림 프레임으로 세대를 판정한다.
-- `GetInterfaceGeneration()`(C++)은 `kUnknown`(0), `kV1_0`(1), `kV1_1`(2)을, `interface_generation`(Python)은 `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`을 보고한다.
+- `GetInterfaceGeneration()`(C++)은 `kUnknown`(0), `kV1_0`(1), `kV1_1`(2), `kV1_2`(3)을, `interface_generation`(Python)은 `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`, `INTERFACE_GEN_V1_2`를 보고한다.
+- 인터페이스 v1.2.0은 Discovery와 GetDeviceInfo에 `if_version` 키를 추가한다. SDK는 이 키를 먼저 읽는다. E2E 헤더만으로는 v1.1.0과 v1.2.0을 구분하지 못하므로, 스트림 프레임은 RDI 프레이밍과 ISO23150 Header 인터페이스 버전으로 v1.2.0을 표시한다.
 - 프레임 단위 세대는 `AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`의 `generation`과 Python `strip_e2e()`의 `e2e["generation"]`에 담긴다. 센서 단위 세대는 `AfiSensorInfo::generation`과 Python Discovery 키 `_interface_generation`(`discovery_generation(info)`)에 담긴다.
 - Config API를 끈 구성에서 첫 스트림 프레임을 받기 전에는 세대를 알 수 없으므로 CSII는 UDP를 사용한다. 첫 호출부터 v1.0.x 센서에 전달하려면 `csii_transport = "tcp"`를 지정한다.
 
-스트림 layout은 두 세대에서 같으며, SDK는 모든 값을 변환하지 않고 전달한다. 아래 필드는 v1.0.x에서 의미가 다르며, 두 세대는 Common Header의 인터페이스 버전(`1.0.0` 또는 `1.1.0`)으로 구분한다.
+스트림 layout은 두 세대에서 같으며, SDK는 모든 값을 변환하지 않고 전달한다. 아래 필드는 v1.0.x에서 의미가 다르며, 두 세대는 ISO23150 Header의 인터페이스 버전(`1.0.0` 또는 `1.1.0`)으로 구분한다.
 
 | 필드 | 인터페이스 v1.0.x | 인터페이스 v1.1.0 |
 |------|-------------------|-------------------|
@@ -957,7 +955,7 @@ SDK가 세대를 판정하는 방식은 다음과 같다.
 | RDI 반경 속도 영역 | ±50 m/s(FW 3.0.0) | −111.11 m/s부터 |
 | SHII 센서 운영 모드 | `150` 발생 가능 | `6`(UDR) 발생 가능 |
 | SHII 입력 신호 상태 | 1개 | 4개 |
-| E2E Counter | 스트림별, TCP 연결마다 1부터 증가 | RDI, SHII, SPI가 공유하는 송신 슬롯 |
+| E2E Counter | 스트림별, TCP 연결마다 1부터 증가 | RDI, SHII, SPI가 공유하는 송신 주기 |
 
 ---
 
@@ -998,12 +996,12 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | `recv_timestamp_ns` | `uint64_t` | 호스트 수신 시각(steady clock) |
 | `frame_seq` | `uint32_t` | SDK 프레임 시퀀스 번호 |
 | `detections_storage` | `std::vector<bts_rdi_detection_t>` | 소유한 detection 배열 |
-| `e2e_counter` | `uint32_t` | E2E Counter(송신 슬롯) |
+| `e2e_counter` | `uint32_t` | E2E Counter(송신 주기) |
 | `e2e_checked` | `bool` | `validate_e2e` 활성 여부 |
 | `e2e_valid` | `bool` | Length, Data ID, CRC 검증 통과 여부 |
 | `generation` | `AfiInterfaceGeneration` | E2E 헤더로 판정한 송신 측 세대 |
 
-`message`는 Common Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1은 최대 2048개를 송신한다.
+`message`는 ISO23150 Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1은 최대 2048개를 송신한다.
 
 ### Detection 필드 (`bts_rdi_detection_t`, 51바이트)
 
@@ -1029,7 +1027,7 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 
 ### `AfiShiMessage` (= `bts_shi_message_t`, 센서 상태)
 
-`AfiShiMessage`는 Common Header 필드, `num_valid_operation_modes` / `sensor_operation_modes[]`(DR..UDR `0..6`, Degradation `10`, Evaluation `50`, Calibration `100`, Initialising `200`, Test `201`), `sensor_defect_recognised`, `sensor_defect_reason`, `supply_voltage_status`, `sensor_temperature_status`, `num_valid_input_signal_statuses` / `sensor_input_signal_types[]` / `sensor_input_signal_statuses[]`, `sensor_time_sync`, `num_valid_calibration_components` / `sensor_calibration_components[]` / `sensor_calibration_statuses[]` / `sensor_calibration_states[]`를 담는다. 메시지 길이는 가변이다.
+`AfiShiMessage`는 ISO23150 Header 필드, `num_valid_operation_modes` / `sensor_operation_modes[]`(DR..UDR `0..6`, Degradation `10`, Diagnostic `20`, Programming `21`, Fault `100`, Initialising `200`), `sensor_defect_recognised`, `sensor_defect_reason`, `supply_voltage_status`, `sensor_temperature_status`, `num_valid_input_signal_statuses` / `sensor_input_signal_types[]` / `sensor_input_signal_statuses[]`, `sensor_time_sync`, `num_valid_calibration_components` / `sensor_calibration_components[]` / `sensor_calibration_statuses[]` / `sensor_calibration_states[]`를 담는다. 메시지 길이는 가변이다.
 
 ### `AfiSpiMessage` (= `bts_spi_message_t`, 센서 성능과 자세)
 
@@ -1051,7 +1049,7 @@ Config API 회전값(`AfiRotation`, `get_rotation()`)의 단위는 도(degree)�
 |------|:---:|:---:|------|
 | `stream` | | ✓ | `AfiStreamKind::kDetection`, `kHealth`, `kPerformance` |
 | `recv_timestamp_ns` | ✓ | ✓ | 호스트 수신 시각(steady clock) |
-| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO Common Header의 timestamp와 MessageCounter |
+| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO23150 Header의 timestamp와 MessageCounter |
 | `e2e_counter`, `e2e_checked`, `e2e_valid` | ✓ | ✓ | E2E Counter와 판정 결과 |
 | `payload` | | ✓ | 재조립된 그대로의 E2E 헤더와 ISO payload |
 | `generation` | ✓ | ✓ | 송신 측 세대 |
@@ -1062,12 +1060,13 @@ Config API 회전값(`AfiRotation`, `get_rotation()`)의 단위는 도(degree)�
 |------|------|
 | `AfiModeStatus` | `access_mode`(`AfiAccessMode`), `access_mode_name`(`"normal"` / `"diagnostic"` / `"programming"`), `elapsed_ms`, `streams_halted` |
 | `AfiSensorResult` | `return_code`(응답이 없으면 `-1`), `return_name`(예: `"SESSION_REQUIRED"`), `error_message`(펌웨어 업데이트 메서드), `e2e_ok` |
-| `AfiInterfaceGeneration` | `kUnknown`(0), `kV1_0`(1), `kV1_1`(2) |
-| `AfiDeviceInfo` | `serial_number`, `mac_address`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash` |
+| `AfiInterfaceGeneration` | `kUnknown`(0), `kV1_0`(1), `kV1_1`(2), `kV1_2`(3) |
+| `AfiDeviceInfo` | `serial_number`, `mac_address`, `vlan_id`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash` |
 | `AfiSensorStatus` | `operation_state`, `operation_state_code`, `temperature_mcu`, `temperature_rf`, `voltage`, `uptime_sec` |
 | `AfiNetworkConfig` | `ip_address`, `subnet_mask`, `gateway`, `api_port`, `vlan_id`, `detection`, `health`, `performance`(`AfiStreamDestination`의 `ip`, `port`, `protocol`) |
+| `AfiFaultLogPage` | `ring`(`AfiFaultLogRing::kFault` / `kSample`), `slots`, `head`, `boot_count`, `slot`, `records`(슬롯 128B 원문) |
 | `AfiBootInfo` | `fw_update_active`, `fw_update_valid_a`, `fw_update_valid_b`, `fw_update_boot_count`, `boot_info_status` |
-| `AfiOtaStatus` | `state`(`"idle"`, `"transferring"`, `"verifying"`, `"writing"`, `"error"`), `progress_pct`, `current_component`, `error_message` |
+| `AfiOtaStatus` | `state`(`"idle"`, `"initializing"`, `"transferring"`, `"verifying"`, `"writing"`, `"error"`), `progress_pct`, `current_component`, `error_message` |
 
 ---
 
@@ -1088,7 +1087,7 @@ C++ 코드는 `afi_error.h`의 `afi::AfiError` enum이다. Python 상수는 같�
 | `kSensorError` | `-8` | `SENSOR_ERROR` | 그 밖의 레이더 반환 코드(예: `INTERNAL_ERROR`) |
 | `kInternalError` | `-9` | `INTERNAL_ERROR` | SDK 내부 오류 |
 | `kNotSupported` | `-10` | `NOT_SUPPORTED` | 레이더 `NOT_SUPPORTED`, 또는 인터페이스 v1.0.x 센서(요청 미송신) |
-| `kBusy` | `-11` | `BUSY` | 레이더 `BUSY`(초당 200건 초과 요청) |
+| `kBusy` | `-11` | `BUSY` | 레이더 `BUSY`(초당 200건 초과 요청, `GetFaultLog` 플래시 작업 진행, 또는 기동 후 3초 이내의 NVM 기록 요청) |
 | `kSessionRequired` | `-12` | `SESSION_REQUIRED` | 레이더 `SESSION_REQUIRED`(현재 접근 모드에서 열리지 않은 메서드) |
 | `kAccessDenied` | `-13` | `ACCESS_DENIED` | 레이더 `ACCESS_DENIED`(모드 재진입 또는 역방향 전이). Programming 해제는 재부팅으로 한다 |
 | `kInvalidState` | `-14` | `INVALID_STATE` | 레이더 `INVALID_STATE`(순서가 맞지 않는 단계, 예: idle이 아닌 업데이트 세션) |
@@ -1120,7 +1119,7 @@ C++ 코드는 `afi_error.h`의 `afi::AfiError` enum이다. Python 상수는 같�
 | 30511 | TCP/UDP | ← | `0x8004` | `0x60008004` | SPI 성능 정보 |
 | 30520 | UDP 브로드캐스트 | ↔ | | (미적용) | Discovery |
 
-TCP(기본값)에서는 호스트가 센서의 스트림 포트로 접속하고, UDP에서는 호스트가 스트림 포트를 bind한다. SOME/IP Service ID는 `0x6000`이다. 레이더는 100 ms 송신 슬롯마다 RDI, SHII, SPI 메시지를 하나씩 송신한다.
+TCP(기본값)에서는 호스트가 센서의 스트림 포트로 접속하고, UDP에서는 호스트가 스트림 포트를 bind한다. SOME/IP Service ID는 `0x6000`이다. 레이더는 100 ms 송신 주기마다 RDI, SHII, SPI 메시지를 하나씩 송신한다.
 
 **프로토콜 스택 (데이터 스트림)**
 
@@ -1141,7 +1140,7 @@ TCP / UDP
 | 0 | 4 | CRC high | 인터페이스 v1.1.0에서 `0x00000000` |
 | 4 | 4 | CRC | 본문만 대상으로 하는 IEEE 802.3 CRC-32(KAT `0xCBF43926`)이며, CRC가 0이면 통과로 판정하지 않는다 |
 | 8 | 4 | Length | 20바이트 헤더를 제외한 본문 길이 |
-| 12 | 4 | Counter | 데이터 스트림은 송신 슬롯, Config API는 시퀀스 |
+| 12 | 4 | Counter | 데이터 스트림은 송신 주기, Config API는 시퀀스 |
 | 16 | 4 | Data ID | `0x6000 << 16`에 Event ID 또는 Method ID를 더한 값 |
 
 **멀티 센서 호스트 수신 포트 규칙 (UDP, 센서당 +100)**
@@ -1173,10 +1172,10 @@ TCP에서는 각 센서가 기본 포트를 그대로 사용하므로 오프셋�
 | 모든 Config API 호출이 `kNotInitialized` 반환 | `enable_config_api = false`, `Init()` 이전, 또는 `Stop()` 이후 상태이다 |
 | 모든 Config API 호출이 `kNotSupported` 반환 | 인터페이스 v1.0.x 센서이다(`GetInterfaceGeneration() == kV1_0`). 데이터 스트림과 CSII는 계속 동작한다 |
 | Config API 호출의 `kTimeout` / `kDisconnected` | 레이더는 Config API 클라이언트를 하나만 받으므로 다른 클라이언트를 닫는다. 다음 호출이 재연결한다 |
-| `kBusy` | 초당 200건을 넘는 요청이다 |
+| `kBusy` | 초당 200건을 넘는 요청이다. `GetFaultLog`에서는 플래시 소거 또는 기록 작업이 진행 중이었고, 재기동 직후의 `SET`에서는 저장된 설정을 판독하는 중이었다. 재시도한다 |
 | Config API를 끈 구성에서 v1.0.x 센서가 CSII를 받지 못한다 | 세대를 판정하지 못해 CSII가 UDP로 송신되었다. `csii_transport = "tcp"`를 지정한다 |
 | 로그에 E2E 경고 | 프레임별 `e2e_valid`를 확인한다. `e2e_strict = true`는 실패 프레임을 폐기한다 |
-| RDI loss callback이 손실 보고 | UDP에서는 `socket_buffer_size`를 늘리거나 TCP를 사용한다. 공백에는 이 호스트로 송신되지 않은 슬롯(첫 scan 이전, TCP 적체)도 포함된다 |
+| RDI loss callback이 손실 보고 | UDP에서는 `socket_buffer_size`를 늘리거나 TCP를 사용한다. 공백에는 이 호스트로 송신되지 않은 송신 주기(첫 scan 이전, TCP 적체)도 포함된다 |
 | Discovery가 센서를 찾지 못한다 | 동일 서브넷 여부, `bind_ip` 지정, UDP 30520 방화벽 차단 여부를 확인하고 다시 탐색한다 |
 | 레이더 없이 수신 경로 시험 | `python tools/rdi_udp_sender.py 127.0.0.1 30509 50 10`을 실행하고 `sensor_ip = "127.0.0.1"`, `stream_transport = "udp"`, `enable_config_api = false`로 수신한다 |
 

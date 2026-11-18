@@ -1,6 +1,6 @@
 """
 Live interface-conformance verification against real AFI920 sensors
-(interface v1.1.0, firmware v3.1.1).
+(interface v1.1.0 and v1.2.0, firmware v3.1.1).
 
 Per sensor:
   [D] Discovery     — required response fields, value sanity
@@ -11,6 +11,7 @@ Per sensor:
                       SOME/IP header, E2E (20B, CRC-32 over the body, zero
                       CRC never passes), ~100 ms cycle, E2E Counter and
                       MessageCounter continuity, DataQualifier 0/1/6,
+                      v1.2.0 RDI header/chunk messages assembled per scan,
                       shared E2E Counter per send slot across the 3 streams
   [V] CSII input    — UDP 30501 vehicle input, SHII input signal status
 
@@ -43,7 +44,7 @@ from afi_sdk.someip import (  # noqa: E402
     ConfigClient, discover,
     SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE, SERVICE_ID, PROTO_VER, IFACE_VER,
     MSG_TYPE_NOTIFICATION, MSG_TYPE_TP,
-    EVENT_RDI, EVENT_SHII, EVENT_SPI,
+    EVENT_RDI, EVENT_SHII, EVENT_SPI, EVENT_RDI_CHUNK_BASE, IFACE_VER_RDI,
     RANGE_MODE_NAMES,
     METHOD_GET_DEVICE_INFO, METHOD_GET_SENSOR_STATUS,
     METHOD_GET_DIAGNOSTIC_INFO, METHOD_GET_COMMAND_HISTORY,
@@ -56,7 +57,6 @@ from afi_sdk.someip import (  # noqa: E402
 from afi_sdk import streams  # noqa: E402
 
 PI = math.pi
-EXPECTED_IFACE_VERSION = (1, 1, 0)
 EXPECTED_FW = "3.1.1"
 VALID_DQ = {0, 1, 6}
 
@@ -149,11 +149,10 @@ def run_discovery_section(ip: str, info: dict) -> Section:
 
 # ─── [C] Config API ───
 
-DETECTION_FILTERS_V110 = [
-    "filter_ego_specular", "filter_ground_reflection", "filter_ground_sidelobe",
+DETECTION_FILTERS = [
+    "filter_ground_reflection", "filter_ground_sidelobe",
     "filter_multibounce_2x", "filter_specular_mirror",
-    "filter_structure_multipath", "filter_upper_structure",
-    "filter_wheel_microdoppler",
+    "filter_structure_multipath",
 ]
 
 
@@ -219,8 +218,8 @@ def run_config_section(ip: str, ctx: dict) -> Section:
 
     filt = get(METHOD_GET_DETECTION_FILTERS, "GetDetectionFilters")
     if filt:
-        missing = [k for k in DETECTION_FILTERS_V110 if k not in filt]
-        s.check(not missing, "8 detection filters (v1.1.0)",
+        missing = [k for k in DETECTION_FILTERS if k not in filt]
+        s.check(not missing, "5 detection filters",
                 f"missing: {missing}" if missing else "")
 
     ptp = get(METHOD_GET_PTP_CONFIG, "GetPTPConfig")
@@ -252,7 +251,7 @@ def run_config_section(ip: str, ctx: dict) -> Section:
             + (f", failed: {bad}" if bad else ""))
     counters = [e["counter"] for _, e in e2e_results]
     mono = all((b - a) & 0xFFFFFFFF == 1 for a, b in zip(counters, counters[1:]))
-    s.check(mono, "response E2E Counter +1 per response (System Spec 7.3)",
+    s.check(mono, "response E2E Counter +1 per response (Interface Overview §3.2.3)",
             f"{counters[:3]}..{counters[-3:]}")
     client.close()
     return s
@@ -285,7 +284,12 @@ class StreamStats:
         self.msg_counter_decrease = 0
         self.dq = Counter()
         self.iface_bad = 0
+        self.expected_version = (1, 1, 0)
         self.parse_fail = 0
+        self.e2e_msgs = 0
+        self.rdi_assembler = streams.RdiScanAssembler()
+        self.rdi_sessions = {}          # v1.2.0: Session ID per Event ID
+        self.scan_complete = []
         self.recv_t0 = None
         self.recv_t1 = None
         self.arrivals = []
@@ -317,9 +321,18 @@ def _iso_common(iso):
             "dq": iso[23]}
 
 
+def _is_rdi_v12(mid: int, iface: int) -> bool:
+    return iface == IFACE_VER_RDI and (
+        mid == EVENT_RDI
+        or EVENT_RDI_CHUNK_BASE <= mid < EVENT_RDI_CHUNK_BASE + streams.RDI_MAX_CHUNKS)
+
+
 def process_stream_message(data: bytes, event_id: int, st: StreamStats):
     h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
     svc, mid, length, _, session, proto, iface, mtype, ret = h
+    if event_id == EVENT_RDI and _is_rdi_v12(mid, iface):
+        process_rdi_v12_message(data, h, st)
+        return
     if (svc != SERVICE_ID or mid != event_id or proto != PROTO_VER
             or iface != IFACE_VER or (mtype & ~MSG_TYPE_TP) != MSG_TYPE_NOTIFICATION
             or ret != 0 or length + 8 != len(data)):
@@ -334,14 +347,56 @@ def process_stream_message(data: bytes, event_id: int, st: StreamStats):
     if e2e is None:
         st.someip_bad += 1
         return
-    st.frames += 1
-    st.arrivals.append(time.monotonic())
+    _count_e2e(e2e, st)
+    _on_frame(iso, event_id, e2e["counter"], st)
+
+
+def _count_e2e(e2e: dict, st: StreamStats):
+    st.e2e_msgs += 1
     st.e2e_ok += int(e2e["ok"])
     st.e2e_crc_bad += int(not e2e["crc_ok"] and not e2e["crc_zero"])
     st.e2e_crc_zero += int(e2e["crc_zero"])
     st.e2e_id_bad += int(not e2e["data_id_ok"])
     st.e2e_len_bad += int(not e2e["length_ok"])
-    c = e2e["counter"]
+
+
+def process_rdi_v12_message(data: bytes, h: tuple, st: StreamStats):
+    """Interface v1.2.0 RDI: header A/B (0x8002) and chunk k (0x8100 + k)
+    under SOME/IP Interface Version 0x02, one E2E header each, no TP."""
+    svc, mid, length, _, session, proto, iface, mtype, ret = h
+    if (svc != SERVICE_ID or proto != PROTO_VER or mtype != MSG_TYPE_NOTIFICATION
+            or ret != 0 or length + 8 != len(data)):
+        st.someip_bad += 1
+        return
+    # Each RDI Event ID keeps its own Session ID; header A and header B share
+    # the 0x8002 counter (Interface Overview §3.1).
+    last = st.rdi_sessions.get(mid)
+    if last is not None and ((session - last) & 0xFFFF) != 1:
+        st.session_gaps += 1
+    st.rdi_sessions[mid] = session
+    e2e, body = streams.strip_e2e(data[SOMEIP_HEADER_SIZE:],
+                                  expected_data_id=streams.e2e_data_id(mid))
+    if e2e is None:
+        st.someip_bad += 1
+        return
+    _count_e2e(e2e, st)
+    if mid == EVENT_RDI:
+        scans = st.rdi_assembler.on_header(e2e["counter"], e2e["ok"], body)
+    else:
+        scans = st.rdi_assembler.on_chunk(e2e["counter"], e2e["ok"],
+                                          mid - EVENT_RDI_CHUNK_BASE, body)
+    for scan in scans:
+        on_rdi_scan(scan, st)
+
+
+def on_rdi_scan(scan: dict, st: StreamStats):
+    st.scan_complete.append(scan["complete"])
+    _on_frame(scan["payload"], EVENT_RDI, scan["e2e_counter"], st)
+
+
+def _on_frame(iso: bytes, event_id: int, c: int, st: StreamStats):
+    st.frames += 1
+    st.arrivals.append(time.monotonic())
     st.e2e_counters.append(c)
     if st.last_e2e_counter is not None:
         delta = (c - st.last_e2e_counter) & 0xFFFFFFFF
@@ -355,7 +410,7 @@ def process_stream_message(data: bytes, event_id: int, st: StreamStats):
     if common is None:
         st.parse_fail += 1
         return
-    if common["version"] != EXPECTED_IFACE_VERSION or common["interface_id"] != IFACE_IDS[event_id]:
+    if common["version"] != st.expected_version or common["interface_id"] != IFACE_IDS[event_id]:
         st.iface_bad += 1
     st.dq[common["dq"]] += 1
     if common["dq"] == 0:
@@ -449,6 +504,9 @@ def receive_stream(ip, port, event_id, transport, duration, st: StreamStats,
         except OSError as exc:
             st.error = str(exc)
             break
+    if event_id == EVENT_RDI:
+        for scan in st.rdi_assembler.poll(time.monotonic() + 1.0):
+            on_rdi_scan(scan, st)
     st.recv_t1 = time.monotonic()
     sock.close()
     return st
@@ -478,6 +536,14 @@ def run_stream_section(ip: str, info: dict, ctx: dict, duration: float) -> Secti
                     f"host IPv4: {sorted(local)}")
 
     stats = {name: StreamStats(name) for name, *_ in plan}
+    # ISO23150 Header InterfaceVersion is the Discovery if_version; sensors
+    # before v1.2.0 omit the key and send 1.1.0.
+    try:
+        expected = tuple(int(x) for x in (info.get("if_version") or "1.1.0").split("."))
+    except ValueError:
+        expected = (1, 1, 0)
+    for st in stats.values():
+        st.expected_version = expected
     start = threading.Event()
     threads = []
     for name, _, eid, port, proto, _ in plan:
@@ -504,9 +570,9 @@ def run_stream_section(ip: str, info: dict, ctx: dict, duration: float) -> Secti
             continue
         s.check(st.someip_bad == 0, f"{name} SOME/IP header conformance",
                 f"{st.someip_bad} bad, session gaps={st.session_gaps}")
-        pct = 100.0 * st.e2e_ok / st.frames
-        s.check(st.e2e_ok == st.frames, f"{name} E2E pass rate",
-                f"{st.e2e_ok}/{st.frames} ({pct:.2f}%) crc_bad={st.e2e_crc_bad} "
+        pct = 100.0 * st.e2e_ok / max(st.e2e_msgs, 1)
+        s.check(st.e2e_ok == st.e2e_msgs, f"{name} E2E pass rate",
+                f"{st.e2e_ok}/{st.e2e_msgs} ({pct:.2f}%) crc_bad={st.e2e_crc_bad} "
                 f"crc_zero={st.e2e_crc_zero} id_bad={st.e2e_id_bad} len_bad={st.e2e_len_bad}")
         s.check(st.e2e_counter_nonmono == 0, f"{name} E2E Counter no repeat/decrease",
                 f"{st.e2e_counter_nonmono} non-monotonic, {st.e2e_counter_gaps} skipped slots")
@@ -514,8 +580,16 @@ def run_stream_section(ip: str, info: dict, ctx: dict, duration: float) -> Secti
                 f"{st.msg_counter_decrease} decreases")
         s.check(set(st.dq) <= VALID_DQ, f"{name} DataQualifier in {{0,1,6}}",
                 f"{dict(st.dq)}")
-        s.check(st.iface_bad == 0, f"{name} InterfaceVersion 1.1.0 / InterfaceID",
+        ver = ".".join(str(x) for x in st.expected_version)
+        s.check(st.iface_bad == 0, f"{name} InterfaceVersion {ver} / InterfaceID",
                 f"{st.iface_bad} bad")
+        if name == "RDI" and st.scan_complete:
+            # The first and last scans may straddle the capture window.
+            inner = st.scan_complete[1:-1]
+            s.check(all(inner), "RDI v1.2.0 scans complete",
+                    f"{inner.count(False)} incomplete of {len(inner)} inner scans "
+                    f"(boundary: {st.scan_complete[0]}/{st.scan_complete[-1]}), "
+                    f"{st.e2e_msgs} messages")
         s.check(st.parse_fail == 0, f"{name} ISO payload parse", f"{st.parse_fail} failed")
         iv = [b - a for a, b in zip(st.arrivals, st.arrivals[1:])]
         if iv:
@@ -527,7 +601,7 @@ def run_stream_section(ip: str, info: dict, ctx: dict, duration: float) -> Secti
         if name == "RDI":
             s.info(f"RDI detections avg={st.detections_total / st.frames:.1f}/frame")
 
-    # RDI, SHII, SPI of one send slot carry the same E2E Counter (System Spec 8.2).
+    # RDI, SHII, SPI of one send slot carry the same E2E Counter (Interface Overview §3.2.3).
     sets = [set(stats[n].e2e_counters) for n in ("RDI", "SHII", "SPI") if stats[n].frames]
     if len(sets) == 3:
         common = sets[0] & sets[1] & sets[2]
@@ -536,6 +610,8 @@ def run_stream_section(ip: str, info: dict, ctx: dict, duration: float) -> Secti
                 f"common={len(common)} union={len(union)}")
     ctx["shii_stats"] = stats.get("SHII")
     return s
+
+
 
 
 # ─── [V] CSII vehicle input ───
@@ -594,6 +670,8 @@ def run_csii_section(ip: str, info: dict, ctx: dict, duration: float) -> Section
 
 
 # ─── main ───
+
+
 
 def verify_sensor(info: dict, duration: float, skip_csii: bool) -> bool:
     ip = info.get("ip_address") or info.get("_source_ip")

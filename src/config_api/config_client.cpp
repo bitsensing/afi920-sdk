@@ -4,7 +4,6 @@
 #include "protocol/someip.h"
 #include "util/logger.h"
 #include "bts_iso23150_e2e.h"
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -153,9 +152,11 @@ int ConfigClient::GetDeviceInfo(AfiDeviceInfo& out) {
     if (rc != kOk) return rc;
     out.serial_number    = safe_value(data, "serial_number", std::string());
     out.mac_address      = safe_value(data, "mac_address", std::string());
+    out.vlan_id          = safe_value(data, "vlan_id", static_cast<uint16_t>(0));
     out.model_name       = safe_value(data, "model_name", std::string());
     out.hw_version       = safe_value(data, "hw_version", std::string());
     out.software_version = safe_value(data, "software_version", std::string());
+    out.if_version       = safe_value(data, "if_version", std::string());
     out.bootloader_hash  = safe_value(data, "bootloader_hash", std::string());
     out.fw_hash          = safe_value(data, "fw_hash", std::string());
     return kOk;
@@ -184,8 +185,8 @@ int ConfigClient::GetDiagnosticInfo(AfiDiagnosticInfo& out) {
     out.max_fault_level_code = safe_value(data, "max_fault_level_code", static_cast<uint8_t>(0));
     out.trigger_fault_id     = safe_value(data, "trigger_fault_id", std::string());
     out.active_fault_count   = safe_value(data, "active_fault_count", static_cast<uint16_t>(0));
-    out.m7_snapshot_stale    = safe_value(data, "m7_snapshot_stale", false);
-    out.m7_stale_cycles      = safe_value(data, "m7_stale_cycles", 0u);
+    out.status_snapshot_stale = safe_value(data, "status_snapshot_stale", false);
+    out.status_stale_cycles   = safe_value(data, "status_stale_cycles", 0u);
     out.faults.clear();
     if (data.contains("faults") && data["faults"].is_array()) {
         for (auto& f : data["faults"]) {
@@ -219,6 +220,61 @@ int ConfigClient::GetCommandHistoryInfo(AfiCommandHistory& out) {
     out.total_commands = safe_value(data, "total_commands", 0u);
     out.success_count  = safe_value(data, "success_count", 0u);
     out.fail_count     = safe_value(data, "fail_count", 0u);
+    return kOk;
+}
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// One record: kAfiFaultLogSlotSize bytes as 2 × kAfiFaultLogSlotSize hex digits.
+static bool parse_fault_log_record(const json& item, std::vector<uint8_t>& out) {
+    if (!item.is_string()) return false;
+    const std::string& hex = item.get_ref<const std::string&>();
+    if (hex.size() != 2 * kAfiFaultLogSlotSize) return false;
+    out.resize(kAfiFaultLogSlotSize);
+    for (size_t i = 0; i < kAfiFaultLogSlotSize; ++i) {
+        int hi = hex_nibble(hex[2 * i]);
+        int lo = hex_nibble(hex[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return true;
+}
+
+int ConfigClient::GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count,
+                              AfiFaultLogPage& out) {
+    if (count < 1 || count > kAfiFaultLogPageMax) return kInvalidParam;
+    const char* ring_name;
+    switch (ring) {
+        case AfiFaultLogRing::kFault:  ring_name = "fault"; break;
+        case AfiFaultLogRing::kSample: ring_name = "sample"; break;
+        default: return kInvalidParam;
+    }
+    json req = {{"ring", ring_name}, {"slot", slot}, {"count", count}};
+    json data;
+    int rc = SendJsonRequest(static_cast<uint16_t>(MethodId::kGetFaultLog), req, data);
+    if (rc != kOk) return rc;
+
+    std::string reported = safe_value(data, "ring", std::string(ring_name));
+    if (reported == "fault")       out.ring = AfiFaultLogRing::kFault;
+    else if (reported == "sample") out.ring = AfiFaultLogRing::kSample;
+    else return kProtocolError;
+    out.slots      = safe_value(data, "slots", 0u);
+    out.head       = safe_value(data, "head", 0u);
+    out.boot_count = safe_value(data, "boot_count", 0u);
+    out.slot       = safe_value(data, "slot", slot);
+    out.records.clear();
+    auto it = data.find("records");
+    if (it == data.end() || !it->is_array()) return kProtocolError;
+    for (const auto& item : *it) {
+        std::vector<uint8_t> rec;
+        if (!parse_fault_log_record(item, rec)) return kProtocolError;
+        out.records.push_back(std::move(rec));
+    }
     return kOk;
 }
 
@@ -319,9 +375,7 @@ int ConfigClient::GetDetectionThreshold(AfiDetectionThreshold& out) {
     json data;
     int rc = SendJsonRequest(static_cast<uint16_t>(MethodId::kGetDetectionThreshold), data);
     if (rc != kOk) return rc;
-    out.snr_dB = safe_value(data, "snr_threshold_db", 0.0f);
-    if (!std::isfinite(out.snr_dB) || out.snr_dB < 1.0f || out.snr_dB > 9.0f ||
-        !parse_cfar_table(data, "cfar_table_first_frame",
+    if (!parse_cfar_table(data, "cfar_table_first_frame",
                           out.cfar_table_first_frame)) {
         return kProtocolError;
     }
@@ -338,16 +392,13 @@ int ConfigClient::GetDetectionThreshold(AfiDetectionThreshold& out) {
 }
 
 int ConfigClient::SetDetectionThreshold(const AfiDetectionThreshold& threshold) {
-    if (!std::isfinite(threshold.snr_dB) || threshold.snr_dB < 1.0f ||
-        threshold.snr_dB > 9.0f ||
-        !is_valid_cfar_table(threshold.cfar_table_first_frame) ||
+    if (!is_valid_cfar_table(threshold.cfar_table_first_frame) ||
         (threshold.has_cfar_table_second_frame &&
          !is_valid_cfar_table(threshold.cfar_table_second_frame))) {
         return kInvalidParam;
     }
 
     json req = {
-        {"snr_threshold_db", threshold.snr_dB},
         {"cfar_table_first_frame", threshold.cfar_table_first_frame},
     };
     if (threshold.has_cfar_table_second_frame) {
@@ -362,26 +413,20 @@ int ConfigClient::GetDetectionFilters(AfiDetectionFilters& out) {
     int rc = SendJsonRequest(static_cast<uint16_t>(MethodId::kGetDetectionFilters), data);
     if (rc != kOk) return rc;
     const AfiDetectionFilters d;
-    out.filter_ego_specular        = safe_value(data, "filter_ego_specular", d.filter_ego_specular);
     out.filter_ground_sidelobe     = safe_value(data, "filter_ground_sidelobe", d.filter_ground_sidelobe);
-    out.filter_upper_structure     = safe_value(data, "filter_upper_structure", d.filter_upper_structure);
     out.filter_multibounce_2x      = safe_value(data, "filter_multibounce_2x", d.filter_multibounce_2x);
     out.filter_structure_multipath = safe_value(data, "filter_structure_multipath", d.filter_structure_multipath);
     out.filter_specular_mirror     = safe_value(data, "filter_specular_mirror", d.filter_specular_mirror);
-    out.filter_wheel_microdoppler  = safe_value(data, "filter_wheel_microdoppler", d.filter_wheel_microdoppler);
     out.filter_ground_reflection   = safe_value(data, "filter_ground_reflection", d.filter_ground_reflection);
     return kOk;
 }
 
 int ConfigClient::SetDetectionFilters(const AfiDetectionFilters& filters) {
     json req = {
-        {"filter_ego_specular", filters.filter_ego_specular},
         {"filter_ground_sidelobe", filters.filter_ground_sidelobe},
-        {"filter_upper_structure", filters.filter_upper_structure},
         {"filter_multibounce_2x", filters.filter_multibounce_2x},
         {"filter_structure_multipath", filters.filter_structure_multipath},
         {"filter_specular_mirror", filters.filter_specular_mirror},
-        {"filter_wheel_microdoppler", filters.filter_wheel_microdoppler},
         {"filter_ground_reflection", filters.filter_ground_reflection},
     };
     json data;
@@ -589,6 +634,7 @@ int ConfigClient::ResetConfigDefaults(const std::vector<std::string>& keys,
     if (out) out->reset_fields = safe_value(data, "reset_fields", 0u);
     return kOk;
 }
+
 
 // ─── Access Mode (0x00Ex) ───
 

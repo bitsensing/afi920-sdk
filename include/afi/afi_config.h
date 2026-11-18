@@ -72,6 +72,7 @@ struct AfiSdkConfig {
     // v1.0.2 additions are appended to preserve the order and offsets of the
     // original public members for existing aggregate-style callers.
 
+
     /// Optional per-stream transport overrides (empty = stream_transport)
     std::string rdi_transport;
     std::string shi_transport;

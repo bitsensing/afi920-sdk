@@ -8,7 +8,11 @@ E2E header layout: CRC high (4B, 0) | CRC-32 (4B) | Length (4B) | Counter (4B)
 | Data ID (4B). The IEEE 802.3 CRC-32 (zlib.crc32) covers the body only.
 Interface v1.0.x (firmware 3.0.0 to 3.1.0) keeps the layout but puts a
 CRC-64/XZ in the first 8 bytes, over Length, Counter, Data ID and the body;
-``strip_e2e`` accepts it on receive (this SDK release only).
+``strip_e2e`` accepts it on receive.
+
+Interface v1.2.0 sends one RDI scan as header and chunk messages
+(SOME/IP Interface Version 0x02); ``RdiStreamDecoder`` turns RDI messages of
+every generation into one single-message payload per scan.
 
 Dependencies: Python 3.8+ (stdlib only)
 
@@ -20,14 +24,19 @@ import logging
 import struct
 import time
 import zlib
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from afi_sdk.someip import (SERVICE_ID, EVENT_CSII, INTERFACE_GEN_V1_0,
-                            INTERFACE_GEN_V1_1)
+from afi_sdk.someip import (SERVICE_ID, EVENT_CSII, EVENT_RDI,
+                            EVENT_RDI_CHUNK_BASE, RDI_MAX_CHUNKS,
+                            IFACE_VER, IFACE_VER_RDI, PROTO_VER,
+                            MSG_TYPE_NOTIFICATION, MSG_TYPE_TP,
+                            SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE,
+                            INTERFACE_GEN_V1_0, INTERFACE_GEN_V1_1,
+                            INTERFACE_GEN_V1_2)
 
 _log = logging.getLogger("afi_sdk.streams")
 
-# ── E2E header (System Spec §7) ──
+# ── E2E header (Interface Overview §3.2) ──
 
 E2E_HEADER_SIZE = 20
 E2E_SERVICE_PREFIX = 0x6000
@@ -44,7 +53,7 @@ CRC32_CHECK = 0xCBF43926
 def e2e_data_id(sub16: int) -> int:
     """E2E Data ID: Service 0x6000 in the high half, channel id in the low half.
 
-    The Config API uses the Method ID.
+    Data streams use the Event ID; the Config API uses the Method ID.
     """
     return (E2E_SERVICE_PREFIX << 16) | (sub16 & 0xFFFF)
 
@@ -103,7 +112,8 @@ _e2e_failures: Dict[int, int] = {}
 
 
 def strip_e2e(frame: bytes, validate: bool = True,
-              expected_data_id: Optional[int] = None
+              expected_data_id: Optional[int] = None,
+              allow_zero_crc: bool = False
               ) -> Tuple[Optional[dict], bytes]:
     """Strip and verify the E2E header of a payload.
 
@@ -115,6 +125,9 @@ def strip_e2e(frame: bytes, validate: bool = True,
         validate: recompute the CRC (CRC-32 over the body; CRC-64/XZ over
             Length, Counter, Data ID and the body when the high word is not 0)
         expected_data_id: channel Data ID, or None to skip the identity check
+        allow_zero_crc: accept a zero CRC field on the Data ID and Length
+            checks alone (an exception to Interface Overview §3.2.5 for a
+            stream whose sender may leave the CRC out)
 
     Returns:
         (e2e_dict, body). The dictionary carries ``length_ok``,
@@ -132,13 +145,16 @@ def strip_e2e(frame: bytes, validate: bool = True,
     e2e["data_id_ok"] = (
         expected_data_id is None or e2e["data_id"] == expected_data_id
     )
-    # System Spec §7.5: a zero CRC field never counts as a pass.
+    # Interface Overview §3.2.5: a zero CRC field never counts as a pass, except under
+    # the allow_zero_crc exception, which passes on the Data ID and Length.
     e2e["crc_zero"] = (e2e["crc_high"] == 0 and e2e["crc"] == 0)
     e2e["generation"] = (INTERFACE_GEN_V1_1 if e2e["crc_high"] == 0
                          else INTERFACE_GEN_V1_0)
     ok = e2e["length_ok"] and e2e["data_id_ok"]
     if validate:
-        if e2e["crc_high"] == 0:
+        if e2e["crc_zero"] and allow_zero_crc:
+            e2e["crc_ok"] = True
+        elif e2e["crc_high"] == 0:
             e2e["crc_ok"] = (not e2e["crc_zero"]
                              and crc32_ieee(body) == e2e["crc"])
         else:
@@ -257,8 +273,14 @@ class SomeipTpReassembler:
 
 RDI_HEADER_SIZE = 36
 RDI_DETECTION_SIZE = 51
-RDI_MAX_DETECTIONS = 8192        # protocol limit; FW v3.1.1 sends at most 2048
+RDI_MAX_DETECTIONS = 8192        # single-message format limit; radars send at most 2048
 RDI_MAX_PAYLOAD_SIZE = RDI_HEADER_SIZE + RDI_MAX_DETECTIONS * RDI_DETECTION_SIZE
+
+# Interface v1.2.0 header/chunk messages (03_RDI_Radar_Detections §1)
+RDI_HEADER_MSG_SIZE = 40         # Detection Header (36) + List Layout (4)
+RDI_CHUNK_HEADER_SIZE = 8        # MessageCounter (4) + FirstEntityIndex (2) + EntityCount (2)
+RDI_ENTITIES_PER_CHUNK = 27
+RDI_SCAN_TIMEOUT_S = 0.1         # Interface Overview §3.2.3
 
 
 def parse_rdi_frame(payload: bytes) -> Optional[dict]:
@@ -317,6 +339,256 @@ def parse_rdi_detection(payload: bytes, det_start: int, index: int
     }
 
 
+def parse_rdi_header_msg(body: bytes) -> Optional[dict]:
+    """Parse an interface v1.2.0 RDI header message body (40B, post-E2E).
+
+    Returns the parse_rdi_frame keys (num_detections is the announced count)
+    plus ``entities_per_chunk`` and ``chunk_count``, or None if the size is
+    not 40.
+    """
+    if len(body) != RDI_HEADER_MSG_SIZE:
+        return None
+    hdr = parse_rdi_frame(_rdi_header_only(body))
+    if hdr is None:
+        return None
+    hdr["num_detections"] = struct.unpack_from("<H", body, 34)[0]
+    hdr["entities_per_chunk"], hdr["chunk_count"] = struct.unpack_from(
+        "<HH", body, RDI_HEADER_SIZE)
+    return hdr
+
+
+def _rdi_header_only(body: bytes) -> bytes:
+    # Detection Header with NumberOfValidDetections 0, so parse_rdi_frame
+    # reads the fields without a detection array behind them.
+    return body[:34] + b"\x00\x00"
+
+
+def parse_rdi_chunk(body: bytes) -> Optional[dict]:
+    """Parse an interface v1.2.0 RDI chunk message body (post-E2E).
+
+    Returns {message_counter, first_entity_index, entity_count, det_start}
+    or None when the body does not hold EntityCount detections.
+    """
+    if len(body) < RDI_CHUNK_HEADER_SIZE:
+        return None
+    counter, first, count = struct.unpack_from("<IHH", body, 0)
+    if len(body) != RDI_CHUNK_HEADER_SIZE + count * RDI_DETECTION_SIZE:
+        return None
+    return {"message_counter": counter, "first_entity_index": first,
+            "entity_count": count, "det_start": RDI_CHUNK_HEADER_SIZE}
+
+
+class RdiScanAssembler:
+    """Interface v1.2.0 RDI scan assembly (Interface Overview §3.2.3).
+
+    One scan is header A (Event 0x8002), chunk k (Event 0x8100 + k) and
+    header B (Event 0x8002 again) under one E2E Counter. A message whose E2E
+    Counter equals one of the last two closed scans is late and dropped; a
+    message with another E2E Counter closes the open scan. A scan closes when
+    one header and ChunkCount chunks are in, on header B, on another E2E
+    Counter, or ``timeout_s`` after its first message. A scan without any
+    header is dropped; one with missing chunks keeps the detections it has.
+
+    Every method returns the scans it closed, each a dict:
+      payload               single-message RDI payload (Detection Header and
+                            the received detections, NumberOfValidDetections
+                            set to their count) for parse_rdi_frame
+      e2e_counter, e2e_valid (every message used passed)
+      chunk_count, chunks_received, announced_detections, complete
+      generation            INTERFACE_GEN_V1_2
+    """
+
+    def __init__(self, timeout_s: float = RDI_SCAN_TIMEOUT_S):
+        self.timeout_s = timeout_s
+        self.scans_without_header = 0
+        self.late_messages = 0
+        self._closed: List[int] = []
+        self._open = False
+        self._reset_scan()
+
+    def _reset_scan(self):
+        self._counter = 0
+        self._first = 0.0
+        self._headers_seen = 0
+        self._header: Optional[bytes] = None
+        self._header_valid = False
+        self._chunks: Dict[int, Tuple[bytes, bool]] = {}
+
+    def reset(self):
+        """Drop the open scan and the closed-scan history."""
+        self._open = False
+        self._closed = []
+        self._reset_scan()
+
+    def _admit(self, counter: int, now: float, out: list) -> bool:
+        if counter in self._closed:
+            self.late_messages += 1
+            return False
+        if self._open and counter != self._counter:
+            out.extend(self._close())
+        if not self._open:
+            self._open = True
+            self._reset_scan()
+            self._counter = counter
+            self._first = now
+        return True
+
+    def _complete(self) -> bool:
+        if self._header is None or len(self._header) != RDI_HEADER_MSG_SIZE:
+            return False
+        chunk_count = struct.unpack_from("<H", self._header, RDI_HEADER_SIZE + 2)[0]
+        return all(k in self._chunks for k in range(chunk_count))
+
+    def on_header(self, e2e_counter: int, e2e_valid: bool, body: bytes,
+                  now: Optional[float] = None) -> list:
+        now = time.monotonic() if now is None else now
+        out: list = []
+        if not self._admit(e2e_counter, now, out):
+            return out
+        self._headers_seen += 1
+        if self._header is None or (not self._header_valid and e2e_valid):
+            self._header, self._header_valid = bytes(body), e2e_valid
+        if self._headers_seen >= 2 or self._complete():
+            out.extend(self._close())
+        return out
+
+    def on_chunk(self, e2e_counter: int, e2e_valid: bool, chunk_index: int,
+                 body: bytes, now: Optional[float] = None) -> list:
+        now = time.monotonic() if now is None else now
+        out: list = []
+        if not 0 <= chunk_index < RDI_MAX_CHUNKS:
+            return out
+        if not self._admit(e2e_counter, now, out):
+            return out
+        prev = self._chunks.get(chunk_index)
+        if prev is None or (not prev[1] and e2e_valid):
+            self._chunks[chunk_index] = (bytes(body), e2e_valid)
+        if self._complete():
+            out.extend(self._close())
+        return out
+
+    def poll(self, now: Optional[float] = None) -> list:
+        """Close the open scan once its first message is older than timeout_s."""
+        now = time.monotonic() if now is None else now
+        if self._open and now - self._first >= self.timeout_s:
+            return self._close()
+        return []
+
+    def _close(self) -> list:
+        self._open = False
+        self._closed = [self._counter] + self._closed[:1]
+        hdr = (parse_rdi_header_msg(self._header)
+               if self._header is not None else None)
+        if (hdr is None or hdr["entities_per_chunk"] == 0
+                or hdr["chunk_count"] > RDI_MAX_CHUNKS):
+            # Without a header the timestamp and Ambiguity Domain are unknown.
+            self.scans_without_header += 1
+            return []
+        valid = self._header_valid
+        detections = []
+        used = 0
+        for k in sorted(self._chunks):
+            body, chunk_valid = self._chunks[k]
+            if k >= hdr["chunk_count"]:
+                continue
+            chunk = parse_rdi_chunk(body)
+            if (chunk is None
+                    or chunk["entity_count"] > hdr["entities_per_chunk"]
+                    or chunk["message_counter"] != hdr["message_counter"]):
+                continue
+            detections.append(body[RDI_CHUNK_HEADER_SIZE:])
+            valid = valid and chunk_valid
+            used += 1
+        dets = b"".join(detections)
+        count = len(dets) // RDI_DETECTION_SIZE
+        payload = (self._header[:34] + struct.pack("<H", count) + dets)
+        return [{
+            "payload": payload,
+            "e2e_counter": self._counter,
+            "e2e_valid": valid,
+            "chunk_count": hdr["chunk_count"],
+            "chunks_received": used,
+            "announced_detections": hdr["num_detections"],
+            "complete": used == hdr["chunk_count"] and count == hdr["num_detections"],
+            "generation": INTERFACE_GEN_V1_2,
+        }]
+
+
+class RdiStreamDecoder:
+    """RDI SOME/IP messages of every interface generation in, scans out.
+
+    ``feed`` takes one complete SOME/IP message (a TCP frame or a UDP
+    datagram). The single-message format of v1.0.x and v1.1.0 (Interface
+    Version 0x01, SOME/IP-TP over UDP) yields one scan per message; the
+    v1.2.0 header/chunk messages (Interface Version 0x02) go through
+    RdiScanAssembler. Each scan is the RdiScanAssembler dict; a
+    single-message scan has chunk_count 0 and the generation from its E2E
+    header and ISO23150 Header. Call ``poll`` between receives so a scan
+    without header B closes after RDI_SCAN_TIMEOUT_S.
+    """
+
+    def __init__(self, validate: bool = True,
+                 timeout_s: float = RDI_SCAN_TIMEOUT_S):
+        self.validate = validate
+        self.assembler = RdiScanAssembler(timeout_s)
+        self._tp = SomeipTpReassembler(E2E_HEADER_SIZE + RDI_MAX_PAYLOAD_SIZE)
+        self.e2e_failures = 0
+
+    def feed(self, frame: bytes, now: Optional[float] = None) -> list:
+        if len(frame) < SOMEIP_HEADER_SIZE:
+            return []
+        (service, event, length, _client, session, proto, iface, msg_type,
+         rc) = struct.unpack(SOMEIP_HEADER_FMT, frame[:SOMEIP_HEADER_SIZE])
+        is_chunk = EVENT_RDI_CHUNK_BASE <= event < EVENT_RDI_CHUNK_BASE + RDI_MAX_CHUNKS
+        if (service != SERVICE_ID or not (event == EVENT_RDI or is_chunk)
+                or length + 8 != len(frame) or proto != PROTO_VER or rc != 0
+                or (msg_type & ~MSG_TYPE_TP) != MSG_TYPE_NOTIFICATION):
+            return []
+        body = frame[SOMEIP_HEADER_SIZE:]
+        if iface == IFACE_VER_RDI and not msg_type & MSG_TYPE_TP:
+            e2e, payload = strip_e2e(body, self.validate,
+                                     e2e_data_id(event))
+            if e2e is None:
+                return []
+            if not e2e["ok"]:
+                self.e2e_failures += 1
+            valid = e2e["ok"] and self.validate
+            if event == EVENT_RDI:
+                return self.assembler.on_header(e2e["counter"], valid, payload, now)
+            return self.assembler.on_chunk(e2e["counter"], valid,
+                                           event - EVENT_RDI_CHUNK_BASE, payload, now)
+        if iface != IFACE_VER or is_chunk:
+            return []
+        if msg_type & MSG_TYPE_TP:
+            if len(body) < 4:
+                return []
+            body = self._tp.feed(body[:4], body[4:], session)
+            if not body:
+                return []
+        e2e, payload = strip_e2e(body, self.validate, E2E_DATA_ID_RDI)
+        if e2e is None or parse_rdi_frame(payload) is None:
+            return []
+        if not e2e["ok"]:
+            self.e2e_failures += 1
+        count = struct.unpack_from("<H", payload, 34)[0]
+        gen = e2e["generation"]
+        if gen == INTERFACE_GEN_V1_1 and payload[0] == 1 and payload[1] >= 2:
+            gen = INTERFACE_GEN_V1_2
+        return [{
+            "payload": payload,
+            "e2e_counter": e2e["counter"],
+            "e2e_valid": e2e["ok"] and self.validate,
+            "chunk_count": 0,
+            "chunks_received": 0,
+            "announced_detections": count,
+            "complete": True,
+            "generation": gen,
+        }]
+
+    def poll(self, now: Optional[float] = None) -> list:
+        return self.assembler.poll(now)
+
+
 # ── SHII (Sensor Health, Event 0x8003) — variable length ──
 
 SHII_MIN_SIZE = 32
@@ -326,9 +598,9 @@ SHII_MAX_CALIBRATION_COMPONENTS = 3
 
 
 def _common_header(payload: bytes) -> dict:
-    """ISO 23150 Common Header (24 B, 02_Common_Header): the same keys the
+    """ISO23150 Header (24 B, Interface Overview §3.3): the same keys the
     RDI header uses. DataQualifier 1 means "do not use the content" and 6 a
-    resend of the previous slot (System Spec §8.3)."""
+    resend of the previous slot (Interface Overview §3.3.5)."""
     return {
         "version": (payload[0], payload[1], payload[2]),
         "interface_id": payload[3],
@@ -416,7 +688,7 @@ SPI_MAX_REF_TARGETS = 16
 
 
 def parse_spi(payload: bytes) -> Optional[dict]:
-    """Parse an SPI payload (post-E2E): Common Header, vehicle coordinate
+    """Parse an SPI payload (post-E2E): ISO23150 Header, vehicle coordinate
     system, 32 B pose, FoV segments, object types and reference targets."""
     if len(payload) < SPI_MIN_SIZE:
         return None
@@ -483,6 +755,8 @@ def parse_spi(payload: bytes) -> Optional[dict]:
     msg["reference_target_types"] = reference_targets
 
     return msg
+
+
 
 
 # ── CSII (Common Sensor Input, Event 0x8001, Host → Radar) ──
@@ -553,3 +827,5 @@ def build_csii_frame(payload: bytes, counter: int, session_id: int) -> bytes:
                          0x0001, session_id & 0xFFFF,
                          0x01, 0x01, 0x02, 0x00)  # proto, iface, NOTIFICATION, OK
     return someip + e2e + payload
+
+

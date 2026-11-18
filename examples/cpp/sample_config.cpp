@@ -50,6 +50,7 @@ int main(int argc, char* argv[]) {
         printf("  Hashes:     bl=%s fw=%s\n",
                dev.bootloader_hash.c_str(), dev.fw_hash.c_str());
         printf("  MAC:        %s\n", dev.mac_address.c_str());
+        printf("  VLAN ID:    %u\n", static_cast<unsigned>(dev.vlan_id));
     }
 
     afi::AfiSensorStatus status;
@@ -103,9 +104,9 @@ int main(int argc, char* argv[]) {
     rc = sdk.GetRangeMode(mode);
     print_result("GetRangeMode", rc);
     if (rc == afi::kOk) {
-        const char* mode_names[] = {"DR", "LR", "MR", "SR", "ULR", "USR"};
+        const char* mode_names[] = {"DR", "LR", "MR", "SR", "ULR", "USR", "UDR"};
         uint8_t m = static_cast<uint8_t>(mode);
-        printf("  Mode: %s (%d)\n", (m < 6) ? mode_names[m] : "Unknown", m);
+        printf("  Mode: %s (%d)\n", (m < 7) ? mode_names[m] : "Unknown", m);
     }
 
     // --- Detection ---
@@ -115,7 +116,6 @@ int main(int argc, char* argv[]) {
     rc = sdk.GetDetectionThreshold(thresh);
     print_result("GetDetectionThreshold", rc);
     if (rc == afi::kOk) {
-        printf("  SNR level:  %.0f\n", thresh.snr_dB);
         print_cfar_table("CFAR first", thresh.cfar_table_first_frame);
         if (thresh.has_cfar_table_second_frame) {
             print_cfar_table("CFAR second", thresh.cfar_table_second_frame);
@@ -127,13 +127,10 @@ int main(int argc, char* argv[]) {
     print_result("GetDetectionFilters", rc);
     if (rc == afi::kOk) {
         printf("  Ground reflection: %s\n", filters.filter_ground_reflection ? "ON" : "OFF");
-        printf("  Ego specular:      %s\n", filters.filter_ego_specular ? "ON" : "OFF");
         printf("  Ground sidelobe:   %s\n", filters.filter_ground_sidelobe ? "ON" : "OFF");
-        printf("  Upper structure:   %s\n", filters.filter_upper_structure ? "ON" : "OFF");
         printf("  Multibounce 2x:    %s\n", filters.filter_multibounce_2x ? "ON" : "OFF");
         printf("  Struct multipath:  %s\n", filters.filter_structure_multipath ? "ON" : "OFF");
         printf("  Specular mirror:   %s\n", filters.filter_specular_mirror ? "ON" : "OFF");
-        printf("  Wheel microdopp.:  %s\n", filters.filter_wheel_microdoppler ? "ON" : "OFF");
     }
 
     // --- Time Sync ---

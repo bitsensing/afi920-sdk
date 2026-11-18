@@ -39,7 +39,6 @@ typedef enum {
     BTS_SPI_BS_NONE                     = 0,
     BTS_SPI_BS_PARTIAL_BLOCKAGE         = 1,
     BTS_SPI_BS_FULL_BLOCKAGE            = 2,
-	BTS_SPI_BS_UNKNOWN					= 3,
 } bts_spi_blockage_status_t;
 
 typedef enum {

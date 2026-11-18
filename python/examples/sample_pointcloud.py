@@ -3,11 +3,12 @@ Sample: Receive RDI (point cloud) data from AFI920 sensor
 
 Supports TCP (default) and UDP transport modes.
 TCP: connects to sensor and reads SOME/IP framed messages.
-UDP: listens on local port for SOME/IP-TP segmented messages.
+UDP: listens on local port for SOME/IP datagrams.
 
-Interface v1.1.0: the SOME/IP payload starts with a 20B E2E header
-(CRC-32 over the body), followed by the ISO 23150 RDI payload
-(36B header + 51B per detection). Parsing lives in afi_sdk.streams.
+Interface v1.0.x and v1.1.0 send one RDI message per scan (SOME/IP-TP over
+UDP); interface v1.2.0 sends header and chunk messages. RdiStreamDecoder
+(afi_sdk.streams) reads both and returns one ISO 23150 RDI payload
+(36B header + 51B per detection) per scan.
 
 Usage:
     python sample_pointcloud.py [sensor_ip] [tcp|udp]
@@ -20,45 +21,9 @@ import socket
 import struct
 import sys
 import time
-from typing import Dict
 
-from afi_sdk.someip import (
-    SOMEIP_HEADER_FMT, SOMEIP_HEADER_SIZE,
-    MSG_TYPE_TP, DEFAULT_RDI_PORT,
-)
-from afi_sdk.streams import strip_e2e, parse_rdi_frame, parse_rdi_detection
-
-
-# ── SOME/IP-TP Reassembler ──
-
-class TpReassembler:
-    """Reassemble SOME/IP-TP segmented messages (for RDI)."""
-
-    def __init__(self):
-        self._buffers: Dict[int, bytearray] = {}
-
-    def feed(self, tp_header: bytes, payload: bytes,
-             session_id: int) -> bytes:
-        """Feed a TP segment. Returns complete payload when done, else b""."""
-        offset_raw = struct.unpack(">I", tp_header)[0]
-        more_flag = offset_raw & 0x01
-        offset_bytes = (offset_raw >> 4) * 16
-
-        if session_id not in self._buffers:
-            self._buffers[session_id] = bytearray()
-
-        buf = self._buffers[session_id]
-        end = offset_bytes + len(payload)
-        if end > len(buf):
-            buf.extend(b"\x00" * (end - len(buf)))
-        buf[offset_bytes:end] = payload
-
-        if more_flag == 0:
-            result = bytes(buf)
-            del self._buffers[session_id]
-            return result
-
-        return b""
+from afi_sdk.someip import SOMEIP_HEADER_SIZE, DEFAULT_RDI_PORT
+from afi_sdk.streams import RdiStreamDecoder, parse_rdi_frame, parse_rdi_detection
 
 
 # ── Main ──
@@ -133,10 +98,10 @@ def main():
         sock.bind(("", port))
         sock.settimeout(1.0)
 
-    tp = TpReassembler()
+    decoder = RdiStreamDecoder()
     frame_count = 0
+    partial_scans = 0
     total_detections = 0
-    e2e_errors = 0
     prev_e2e_counter = -1
     lost_packets = 0
     total_packets = 0
@@ -154,80 +119,61 @@ def main():
                 if len(rest) < length:
                     break
                 data = hdr_bytes + rest
-                frame_data = data[SOMEIP_HEADER_SIZE:]
             else:
-                # UDP: receive datagram with TP reassembly
                 data, addr = sock.recvfrom(2048)
-                if len(data) < SOMEIP_HEADER_SIZE:
-                    continue
-
-                h = struct.unpack(SOMEIP_HEADER_FMT, data[:SOMEIP_HEADER_SIZE])
-                msg_type = h[7]
-                session_id = h[4]
-                payload = data[SOMEIP_HEADER_SIZE:]
-
-                is_tp = (msg_type & MSG_TYPE_TP) != 0
-                if not is_tp:
-                    continue
-                if len(payload) < 4:
-                    continue
-                tp_hdr = payload[:4]
-                tp_payload = payload[4:]
-                frame_data = tp.feed(tp_hdr, tp_payload, session_id)
-                if not frame_data:
-                    continue
+            # One message in; zero or more complete scans out.
+            scans = decoder.feed(data) if len(data) >= SOMEIP_HEADER_SIZE else []
         except socket.timeout:
-            continue
+            scans = []
         except OSError:
             break
+        # A v1.2.0 scan whose header B never came closes after 100 ms.
+        scans += decoder.poll()
 
-        # Strip + verify the E2E header ahead of the ISO payload
-        e2e, iso_payload = strip_e2e(frame_data)
-        if e2e is None:
-            continue
-        if not e2e["ok"]:
-            e2e_errors += 1
+        for scan in scans:
+            iso_payload = scan["payload"]
+            hdr = parse_rdi_frame(iso_payload)
+            if not hdr:
+                continue
+            frame_count += 1
+            if not scan["complete"]:
+                partial_scans += 1
 
-        # Got a complete RDI frame
-        frame_count += 1
-        hdr = parse_rdi_frame(iso_payload)
-        if not hdr:
-            continue
+            num_det = hdr["num_detections"]
+            total_detections += num_det
 
-        num_det = hdr["num_detections"]
-        total_detections += num_det
+            # Loss detection on the E2E Counter, which advances once per send
+            # slot. MessageCounter repeats when the sensor resends a scan
+            # (DataQualifier 6), so its gaps do not count lost frames. Only
+            # scans that passed the E2E check advance the count; a decrease
+            # (sensor restart) starts a new baseline.
+            counter = hdr["message_counter"]
+            total_packets += 1
+            if scan["e2e_valid"]:
+                e2e_counter = scan["e2e_counter"]
+                if prev_e2e_counter >= 0 and e2e_counter > prev_e2e_counter:
+                    gap = e2e_counter - prev_e2e_counter - 1
+                    if gap > 0:
+                        lost_packets += gap
+                        print(f"*** Packet loss detected: {gap} frames lost "
+                              f"({lost_packets} lost / {total_packets + lost_packets} total "
+                              f"= {100.0 * lost_packets / (total_packets + lost_packets):.2f}%)")
+                prev_e2e_counter = e2e_counter
 
-        # Loss detection on the E2E Counter, which advances once per send
-        # slot. MessageCounter repeats when the sensor resends a scan
-        # (DataQualifier 6), so its gaps do not count lost frames. Only frames
-        # that passed the E2E check advance the count; a decrease (sensor
-        # restart) starts a new baseline.
-        counter = hdr["message_counter"]
-        total_packets += 1
-        if e2e["ok"]:
-            e2e_counter = e2e["counter"]
-            if prev_e2e_counter >= 0 and e2e_counter > prev_e2e_counter:
-                gap = e2e_counter - prev_e2e_counter - 1
-                if gap > 0:
-                    lost_packets += gap
-                    print(f"*** Packet loss detected: {gap} frames lost "
-                          f"({lost_packets} lost / {total_packets + lost_packets} total "
-                          f"= {100.0 * lost_packets / (total_packets + lost_packets):.2f}%)")
-            prev_e2e_counter = e2e_counter
+            # Print every 10th frame
+            if frame_count % 10 == 0:
+                print(f"[Frame {frame_count}] detections={num_det}"
+                      f"/{scan['announced_detections']}  "
+                      f"counter={counter}  timestamp={hdr['timestamp']} ns")
 
-        # Print every 10th frame
-        if frame_count % 10 == 0:
-            print(f"[Frame {frame_count}] detections={num_det}  "
-                  f"counter={counter}  timestamp={hdr['timestamp']} ns")
-
-            if num_det > 0:
-                det = parse_rdi_detection(iso_payload, hdr["det_start"], 0)
-                if det:
-                    print(f"  [0] r={det['radial_distance']:.2f} m  "
-                          f"az={det['azimuth']:.3f} rad  "
-                          f"el={det['elevation']:.3f} rad  "
-                          f"v={det['radial_velocity']:.2f} m/s  "
-                          f"rcs={det['rcs']:.1f} dBsm")
+                if num_det > 0:
+                    det = parse_rdi_detection(iso_payload, hdr["det_start"], 0)
+                    if det:
+                        print(f"  [0] r={det['radial_distance']:.2f} m  "
+                              f"az={det['azimuth']:.3f} rad  "
+                              f"el={det['elevation']:.3f} rad  "
+                              f"v={det['radial_velocity']:.2f} m/s  "
+                              f"rcs={det['rcs']:.1f} dBsm")
 
     sock.close()
     elapsed = time.monotonic() - start
@@ -237,7 +183,8 @@ def main():
     print(f"Duration:         {elapsed:.0f} seconds")
     print(f"Frames received:  {frame_count}")
     print(f"Total detections: {total_detections}")
-    print(f"E2E check errors: {e2e_errors}")
+    print(f"E2E check errors: {decoder.e2e_failures}")
+    print(f"Partial scans:    {partial_scans}")
     print(f"Frames lost:      {lost_packets}")
     if elapsed > 0:
         print(f"Avg frame rate:   {frame_count / elapsed:.1f} fps")

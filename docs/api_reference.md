@@ -1,6 +1,6 @@
 # API Reference
 
-This reference describes SDK v2.2.0, which implements AFI920 interface v1.1.0 (sensor firmware v3.1.1).
+This reference describes SDK v2.2.0, which implements AFI920 interface v1.2.0 and receives data from interface v1.1.0 (sensor firmware v3.1.1) and v1.0.x sensors.
 
 ## Protocol Stack
 
@@ -96,7 +96,7 @@ The sensor accepts each Config API method only in specific access modes. A metho
 
 | Method | Modes |
 |--------|-------|
-| `GetDeviceInfo`, `GetSensorStatus`, `GetDiagnosticInfo`, `GetCommandHistoryInfo` | Normal, Diagnostic, Programming |
+| `GetDeviceInfo`, `GetSensorStatus`, `GetDiagnosticInfo`, `GetCommandHistoryInfo`, `GetFaultLog` | Normal, Diagnostic, Programming |
 | `Restart` | Normal, Diagnostic, Programming |
 | `ResetAllSettings` | Diagnostic |
 | `GetNetworkConfig` | Normal, Diagnostic, Programming |
@@ -252,7 +252,7 @@ Transport behaviour:
 - `request_timeout_ms` bounds each response and `connect_timeout_ms` each connect.
 - Request bodies above 16,384 bytes are refused before sending with `kInvalidParam`. The sensor closes the connection without a reply for such a request.
 - The sensor serves one Config API client at a time. A second connection is reset as soon as it is accepted.
-- The sensor answers `BUSY` (`kBusy`) above 200 requests per second. `FirmwareDataChunk` is not counted.
+- The sensor answers `BUSY` (`kBusy`) above 200 requests per second. `FirmwareDataChunk` is not counted. `GetFaultLog` also answers `BUSY` while a flash erase or write is in progress, and every method that writes NVM (each `SET` except `SetMode`, and `ResetAllSettings`) answers `BUSY` while the stored settings are still being read after boot (up to 3,000 ms). A retry can succeed.
 
 | Outcome | C++ error |
 |---------|-----------|
@@ -293,12 +293,14 @@ int GetDiagnosticInfo(AfiDiagnosticInfo& out);
 int Restart();
 int ResetAllSettings();
 int GetCommandHistoryInfo(AfiCommandHistory& out);
+int GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count, AfiFaultLogPage& out);
 ```
 
-- `GetDeviceInfo`: serial, MAC, model, HW version, unified software version, bootloader and firmware hashes.
+- `GetDeviceInfo`: serial, MAC, VLAN ID of this boot, model, HW version, unified software version, bootloader and firmware hashes.
 - `GetDiagnosticInfo`: combined state, maximum fault level, and the fault list (source, level, active).
 - `Restart`: restarts the sensor in any access mode. The connection drops after the reply.
 - `ResetAllSettings`: writes the config defaults to NVM and restarts the sensor (diagnostic mode). The sensor keeps its current IP address, subnet mask and gateway.
+- `GetFaultLog`: reads `count` raw 128 B slots (1 to `kAfiFaultLogPageMax` = 12) of the fault ring (`kFault`, 1024 slots) or the system information sample ring (`kSample`, 512 slots) from `slot` on. The page stops at the last slot of the ring and does not wrap. A `count` outside 1 to 12 returns `kInvalidParam` without sending. The slots are not checked: the host keeps a slot whose magic matches the ring, whose `seq` is neither 0 nor 0xFFFFFFFF and whose `crc32` matches, and orders the records by `seq`. Reading a whole ring takes 86 requests (fault) or 43 (sample) with `slot` stepping by 12. The record layout is in the interface Device & Status §01.7. `kBusy` means a flash job was in progress; `kSensorError` with `INTERNAL_ERROR` means the log is off this boot.
 
 #### Network (0x002x)
 
@@ -332,11 +334,10 @@ int GetDetectionFilters(AfiDetectionFilters& out);
 int SetDetectionFilters(const AfiDetectionFilters& filters);
 ```
 
-- The threshold and CFAR tables belong to the current range mode.
-- `snr_threshold_db` is a level in `1..9`. Fractions are stored as sent and the GET answers with two decimals. FW v3.1.1 stores the value but does not use it in detection.
+- The CFAR tables belong to the stored range mode.
 - `cfar_table_first_frame` holds 19 levels in `1..9`. `cfar_table_second_frame` exists only in DR (0) and UDR (6). In single modes the GET omits it and the SET ignores it.
-- `SetDetectionThreshold` validates the level and tables before sending and returns `kInvalidParam` on a violation. `GetDetectionThreshold` returns `kProtocolError` when the response is out of range.
-- `Get/SetDetectionFilters`: the eight filter toggles of `AfiDetectionFilters`. The SDK sends all eight.
+- `SetDetectionThreshold` validates the tables before sending and returns `kInvalidParam` on a violation. `GetDetectionThreshold` returns `kProtocolError` when the response is out of range.
+- `Get/SetDetectionFilters`: the five filter toggles of `AfiDetectionFilters`. The SDK sends all five.
 
 #### Time Sync (0x005x)
 
@@ -346,7 +347,7 @@ int SetPtpConfig(uint8_t profile);
 int SetPtpConfig(uint8_t profile, bool* restart_required);
 ```
 
-- `GetPtpConfig`: running `profile`, stored `configured_profile`, `restart_required`, live sync status, and the system-time grid (`grid_offset_ns`, `grid_state`).
+- `GetPtpConfig`: running `profile`, stored `configured_profile`, `restart_required`, the live PTP port state, and the radiate and send grid (`grid_offset_ns`, `grid_state`).
 - `SetPtpConfig`: stores profile `0=gPTP`, `1=1588v2-L2` or `2=1588v2-UDP`. Values above 2 return `kInvalidParam`. The profile applies after `Restart()`. The two-argument overload reports whether a restart is required.
 
 #### Mounting (0x007x)
@@ -396,7 +397,7 @@ Update sequence:
 5. Call `FirmwareUpdateReboot()` only while the status is `"idle"`; a reboot during a commit or switch cuts the NVM write. Then `ReconnectConfigApi()`.
 6. Verify: `GetBootInfo` reports the written face active and valid with `boot_info_status` `"ok"`, and `GetDeviceInfo` reports the expected hashes.
 
-On any failure after a start, call `FirmwareUpdateAbort()` and start that component again. A transfer interrupted before the slot switch leaves the sensor booting the previous face.
+On any failure after a start, call `FirmwareUpdateAbort()` and start that component again. A refused `FirmwareUpdateStart` can leave the session in `error`, which the 10 s stall timeout does not clear; when `FirmwareUpdateStatus` reports `error`, call `FirmwareUpdateAbort()` before the next start. A transfer interrupted before the slot switch leaves the sensor booting the previous face.
 
 #### Config Persistence (0x009x)
 
@@ -503,8 +504,8 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 
 ### `AfiShiMessage` / `AfiSpiMessage` / `AfiStreamMeta`
 
-- `AfiShiMessage` (`bts_shi_message_t`): sensor health. Operation modes (DR..UDR `0..6`, Degradation `10`, Evaluation `50`, Calibration `100`, Initialising `200`, Test `201`), defect recognised and reason (12 reasons), supply voltage and temperature status, CSII input signal types and statuses, time sync status, and the sensor calibration section. Variable length.
-- `AfiSpiMessage` (`bts_spi_message_t`): sensor performance. Vehicle coordinate system, 32-byte sensor pose (origin x/y/z, yaw/pitch/roll, yaw and pitch errors), FoV segments with blockage status (including `UNKNOWN`), recognisable object types, and reference target types.
+- `AfiShiMessage` (`bts_shi_message_t`): sensor health. Operation modes (DR..UDR `0..6`, Degradation `10`, Diagnostic `20`, Programming `21`, Fault `100`, Initialising `200`), defect recognised and reason (`0`, `1`, `2`, `3`, `5`, `7`, `10`, `11`), supply voltage and temperature status, CSII input signal types and statuses, time sync status, and the sensor calibration section. Variable length.
+- `AfiSpiMessage` (`bts_spi_message_t`): sensor performance. Vehicle coordinate system, 32-byte sensor pose (origin x/y/z, yaw/pitch/roll, yaw and pitch errors), FoV segments with blockage status (none, partial, full), recognisable object types, and reference target types.
 
 | `AfiStreamMeta` field | Type | Description |
 |-------|------|-------------|
@@ -520,8 +521,8 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 |-------|------|-------------|
 | `stream` | `AfiStreamKind` | `kDetection`, `kHealth` or `kPerformance` |
 | `recv_timestamp_ns` | `uint64_t` | Host receive time (steady clock) |
-| `sensor_timestamp_ns` | `uint64_t` | ISO Common Header timestamp |
-| `message_counter` | `uint32_t` | ISO Common Header MessageCounter |
+| `sensor_timestamp_ns` | `uint64_t` | ISO23150 Header timestamp |
+| `message_counter` | `uint32_t` | ISO23150 Header MessageCounter |
 | `e2e_counter` | `uint32_t` | E2E Counter (send slot) |
 | `e2e_checked` | `bool` | `validate_e2e` was on |
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
@@ -575,7 +576,7 @@ Vehicle dynamics sent by `SendVehicleInput()`. The SDK fills the interface heade
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sensor_id` | `uint8_t` | Common Header SensorID (default `1`) |
+| `sensor_id` | `uint8_t` | ISO23150 Header SensorID (default `1`) |
 | `timestamp_ns` | `uint64_t` | Measurement time; `0` uses the host clock |
 | `somc` | `bts_csii_somc_t` | Sensor operation mode command (default `BTS_CSII_SOMC_NORMAL_MODE`) |
 | `global_timestamp_utc` | `double` | UTC seconds |
@@ -603,6 +604,7 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 | `source_ip` | `string` | Address the response came from |
 | `subnet_mask` | `string` | Subnet mask |
 | `gateway` | `string` | Gateway |
+| `vlan_id` | `uint16_t` | VLAN ID of this boot (0 = no VLAN); same as `AfiDeviceInfo::vlan_id` |
 | `port` | `uint16_t` | Config API TCP port (default 30500) |
 | `detection_port` | `uint16_t` | RDI port (default 30509) |
 | `health_port` | `uint16_t` | SHII port (default 30510) |
@@ -617,13 +619,13 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 | `position_code` | `uint8_t` | Mounting position code |
 | `offset_x`, `offset_y`, `offset_z` | `float` | Mounting offset (m) |
 | `yaw_deg`, `pitch_deg`, `roll_deg` | `float` | Rotation (deg) |
-| `range_mode` | `AfiRangeMode` | Stored range mode |
-| `range_mode_name` | `string` | Range mode name (`"DR"`, `"LR"`, ...) |
+| `range_mode` | `AfiRangeMode` | SHII SensorOperationMode with the current access mode applied: `0`..`6` running range mode, `10` Degradation, `20` Diagnostic, `21` Programming, `100` Fault, `200` Initialising. Not the stored `GetRangeMode` value |
+| `range_mode_name` | `string` | Mode name (`"DR"` .. `"UDR"`, `"DEGRADATION"`, `"DIAGNOSTIC"`, `"PROGRAMMING"`, `"FAULT"`, `"INITIALISING"`) |
 | `radar_active` | `bool` | Radar operation active |
-| `radar_mode` | `string` | `"normal"` or `"dummy"` (build configuration) |
+| `radar_mode` | `string` | `"normal"` |
 | `scan_index` | `uint32_t` | Current MessageCounter (`scan_status.scan_index`) |
 | `uptime_seconds` | `uint32_t` | Sensor uptime in seconds (`scan_status.uptime_seconds`) |
-| `ptp_state` | `string` | `"INIT"` / `"SLAVE"` / `"MASTER"` |
+| `ptp_state` | `string` | `"INIT"` / `"SLAVE"` |
 | `ptp_offset_ns` | `int64_t` | PTP clock offset (ns) |
 | `generation` | `AfiInterfaceGeneration` | `kV1_0` when `driver_hash` is present, `kV1_1` when an `m72_*` key is present |
 
@@ -644,6 +646,7 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 |-------|------|-------------|
 | `serial_number` | `string` | Serial number |
 | `mac_address` | `string` | MAC address |
+| `vlan_id` | `uint16_t` | VLAN ID of this boot (0 = no VLAN). `AfiNetworkConfig::vlan_id` is the stored value for the next boot, so the two differ between `SetNetworkConfig` and `Restart` |
 | `model_name` | `string` | Model name |
 | `hw_version` | `string` | Hardware version |
 | `software_version` | `string` | Unified software version |
@@ -651,6 +654,17 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 | `fw_hash` | `string` | Firmware git short hash (running image) |
 
 `software_version` and `fw_hash` describe the running image, so a firmware update shows its new values after the reboot. `bootloader_hash` changes when the bootloader update completes.
+
+#### `AfiFaultLogPage`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ring` | `AfiFaultLogRing` | Ring read (`kFault` or `kSample`) |
+| `slots` | `uint32_t` | Slots in the ring (1024 or 512) |
+| `head` | `uint32_t` | Next slot the sensor writes |
+| `boot_count` | `uint32_t` | Number of this boot; equals the `boot_count` of the records written in it |
+| `slot` | `uint32_t` | First slot of `records` |
+| `records` | `vector<vector<uint8_t>>` | 128 B per slot, raw; an erased slot is all `0xFF` |
 
 #### `AfiSensorStatus`
 
@@ -667,21 +681,21 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `combined_state` | `string` | Combined worst-case state |
+| `combined_state` | `string` | `"INIT"` / `"NORMAL"` |
 | `combined_state_code` | `uint8_t` | Numeric combined state |
 | `max_fault_level` | `string` | Maximum fault level name |
 | `max_fault_level_code` | `uint8_t` | 0=NONE, 1=RECORD, 2=RESET |
 | `trigger_fault_id` | `string` | Triggering fault ID (hex string) |
 | `active_fault_count` | `uint16_t` | Number of active faults |
-| `m7_snapshot_stale` | `bool` | Fault snapshot is stale |
-| `m7_stale_cycles` | `uint32_t` | Stale cycle count |
-| `faults` | `vector<AfiFaultEntry>` | Fault entries |
+| `status_snapshot_stale` | `bool` | Status not updated for 300 ms or more |
+| `status_stale_cycles` | `uint32_t` | Consecutive 100 ms cycles without an update |
+| `faults` | `vector<AfiFaultEntry>` | All 10 radar faults |
 
 | `AfiFaultEntry` field | Type | Description |
 |-------|------|-------------|
 | `id` | `string` | Fault ID (hex string, e.g. `"0x012"`) |
 | `name` | `string` | Fault name |
-| `source` | `string` | `"A53"` or `"M7"` |
+| `source` | `string` | `"RADAR"` |
 | `level` | `string` | Fault level name |
 | `level_code` | `uint8_t` | Numeric fault level |
 | `active` | `bool` | Fault currently active |
@@ -731,25 +745,21 @@ enum class AfiStreamKind : uint8_t {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `snr_dB` | `float` | `5.0` | Level `1..9`, fractions allowed (wire key `snr_threshold_db`) |
 | `cfar_table_first_frame` | `vector<uint8_t>` | 19 × `5` | First-frame CFAR levels, 19 values in `1..9` |
 | `cfar_table_second_frame` | `vector<uint8_t>` | 19 × `5` | Second-frame CFAR levels, 19 values in `1..9` (DR and UDR) |
 | `has_cfar_table_second_frame` | `bool` | `true` | GET: the response carried the second table. SET: send it |
 
 #### `AfiDetectionFilters`
 
-Eight filter toggles with the interface defaults. FW v3.1.1 stores `filter_ego_specular`, `filter_upper_structure` and `filter_wheel_microdoppler` but does not build those stages.
+Five filter toggles with the interface defaults.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `filter_ego_specular` | `bool` | `false` | Ego specular reflection filter |
 | `filter_ground_sidelobe` | `bool` | `true` | Ground sidelobe filter |
-| `filter_upper_structure` | `bool` | `false` | Upper structure filter |
 | `filter_multibounce_2x` | `bool` | `true` | 2x multibounce filter |
 | `filter_structure_multipath` | `bool` | `true` | Structure multipath filter |
 | `filter_specular_mirror` | `bool` | `true` | Specular mirror filter |
-| `filter_wheel_microdoppler` | `bool` | `false` | Wheel micro-Doppler filter |
-| `filter_ground_reflection` | `bool` | `false` | Ground reflection filter (SR subcycle) |
+| `filter_ground_reflection` | `bool` | `false` | Ground reflection filter |
 
 #### `AfiPtpConfig`
 
@@ -764,12 +774,12 @@ Profile values are `0=gPTP`, `1=1588v2-L2`, `2=1588v2-UDP`.
 | `restart_required` | `bool` | Stored profile differs from the running one |
 | `domain` | `uint8_t` | PTP domain |
 | `priority1`, `priority2` | `uint8_t` | Firmware constant `255` (slave only) |
-| `state` | `string` | `"INIT"` / `"SLAVE"` / `"NOT_SYNCED"` (`"MASTER"` is defined but not reached by FW v3.1.1) |
+| `state` | `string` | PTP port state: `"SLAVE"` / `"NOT_SYNCED"` (`"INIT"` precedes PTP start; `"MASTER"` is reserved). Not the lock verdict; SHII SensorTimeSync reports lock. Discovery `ptp_state` reports the same non-SLAVE states as `"INIT"` |
 | `state_code` | `uint8_t` | 1 = SLAVE, 2 = MASTER, 0 otherwise |
 | `offset_ns` | `int64_t` | Clock offset (ns) |
 | `mean_path_delay_ns` | `int64_t` | Mean path delay (ns) |
 | `master_clock_id` | `string` | Master clock identifier |
-| `grid_offset_ns` | `int64_t` | System time minus PTP time (ns). Non-zero means stream timestamps and the send grid differ from PTP time by this amount |
+| `grid_offset_ns` | `int64_t` | Grid time minus system time (PHC) in ns. Non-zero means the radiate and send grid differs from PTP time by this amount. Stream timestamps are PHC time and do not carry it |
 | `grid_state` | `string` | `"FREE"` / `"HOLD"` / `"CONVERGING"` / `"ALIGNED"` |
 
 #### `AfiMountingPosition` / `AfiRotation` / `AfiSensorPosition`
@@ -809,7 +819,7 @@ Profile values are `0=gPTP`, `1=1588v2-L2`, `2=1588v2-UDP`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `state` | `string` | `"idle"`, `"transferring"`, `"verifying"`, `"writing"` or `"error"` |
+| `state` | `string` | `"idle"`, `"initializing"`, `"transferring"`, `"verifying"`, `"writing"` or `"error"` |
 | `progress_pct` | `uint8_t` | Transfer progress (0-100); 100 while verifying and writing after a commit |
 | `current_component` | `string` | Component of the session, or `"none"` |
 | `error_message` | `string` | Empty from `FirmwareUpdateStatus`, even in `"error"`. A failed update step reports its reason in `GetLastSensorResult().error_message` |
@@ -878,7 +888,7 @@ const char* AfiErrorStr(int code);
 | -8 | `kSensorError` | Other sensor return code (e.g. `INTERNAL_ERROR`) | Check `GetLastSensorResult()` |
 | -9 | `kInternalError` | Internal SDK error | Report a bug |
 | -10 | `kNotSupported` | Sensor `NOT_SUPPORTED` (method absent on this image or reserved) | Check the firmware image |
-| -11 | `kBusy` | Sensor `BUSY`: more than 200 requests per second | Slow down |
+| -11 | `kBusy` | Sensor `BUSY`: more than 200 requests per second, a `GetFaultLog` flash job in progress, or an NVM write within 3,000 ms of boot | Slow down, or retry |
 | -12 | `kSessionRequired` | Sensor `SESSION_REQUIRED`: method not open in the current access mode | `EnterMode()` and retry |
 | -13 | `kAccessDenied` | Sensor `ACCESS_DENIED`: mode re-entry or a step back from Programming | Reboot when leaving Programming |
 | -14 | `kInvalidState` | Sensor `INVALID_STATE`: step out of order (e.g. update session not idle) | Poll status, abort, retry |
@@ -1008,12 +1018,13 @@ Sends one CSII message to `csii_port` (Event `0x8001`): one UDP datagram on inte
 
 | Method | Returns |
 |--------|---------|
-| `get_device_info()` | `{serial_number, mac_address, model_name, hw_version, software_version, bootloader_hash, fw_hash}` |
+| `get_device_info()` | `{serial_number, mac_address, vlan_id, model_name, hw_version, software_version, bootloader_hash, fw_hash}` |
 | `get_sensor_status()` | `{operation_state, operation_state_code, temperature_mcu, temperature_rf, voltage, uptime_sec}` |
-| `get_diagnostic_info()` | `{combined_state, combined_state_code, max_fault_level, max_fault_level_code, trigger_fault_id, active_fault_count, m7_snapshot_stale, m7_stale_cycles, faults[]}` |
+| `get_diagnostic_info()` | `{combined_state, combined_state_code, max_fault_level, max_fault_level_code, trigger_fault_id, active_fault_count, status_snapshot_stale, status_stale_cycles, faults[]}` |
 | `restart()` | `int`; the connection drops after the reply |
 | `reset_all_settings()` | `int`; diagnostic mode; writes defaults and restarts |
 | `get_command_history_info()` | `{total_commands, success_count, fail_count}` |
+| `get_fault_log(ring="fault", slot=0, count=12)` | `{ring, slots, head, boot_count, slot, records}`; `records` holds 256 lowercase hex digits per slot. `ring` other than `"fault"` or `"sample"`, `count` outside 1 to 12 or a negative `slot` gives `INVALID_PARAM` without sending |
 
 #### Network (0x002x)
 
@@ -1038,12 +1049,12 @@ Sends one CSII message to `csii_port` (Event `0x8001`): one UDP datagram on inte
 
 | Method | Returns |
 |--------|---------|
-| `get_detection_threshold()` | `{snr_threshold_db, cfar_table_first_frame[, cfar_table_second_frame]}` |
-| `set_detection_threshold(snr_db=None, cfar_table_first_frame=None, cfar_table_second_frame=None)` | `int` (any subset) |
-| `get_detection_filters()` | `{filter_ego_specular, filter_ground_sidelobe, filter_upper_structure, filter_multibounce_2x, filter_structure_multipath, filter_specular_mirror, filter_wheel_microdoppler, filter_ground_reflection}` |
-| `set_detection_filters(**filters)` | `int` (any subset of the eight toggles) |
+| `get_detection_threshold()` | `{cfar_table_first_frame[, cfar_table_second_frame]}` |
+| `set_detection_threshold(cfar_table_first_frame=None, cfar_table_second_frame=None)` | `int` (any subset) |
+| `get_detection_filters()` | `{filter_ground_sidelobe, filter_multibounce_2x, filter_structure_multipath, filter_specular_mirror, filter_ground_reflection}` |
+| `set_detection_filters(**filters)` | `int` (any subset of the five toggles) |
 
-`snr_db` is a level in `1..9` (fractions kept); each CFAR table holds 19 integers in `1..9`. Values outside these ranges give `INVALID_PARAM` without sending. `get_detection_threshold` returns `None` with `PROTOCOL_ERROR` when the sensor's level is out of range.
+Each CFAR table holds 19 integers in `1..9`. Values outside this range give `INVALID_PARAM` without sending. `get_detection_threshold` returns `None` with `PROTOCOL_ERROR` when a sensor table is out of range.
 
 #### Time Sync (0x005x)
 
@@ -1130,7 +1141,7 @@ if result.ok and result.rebooted:
 | Function | Description |
 |----------|-------------|
 | `update(sdk, firmware=None, bootloader=None, reboot=True, on_progress=None) -> UpdateResult` | Runs the sequence below. `firmware` maps `m7_0`, `m7_1`, `m7_2`, `a53` to images and must hold all four or be `None`; a subset is refused before anything is sent |
-| `upload_component(sdk, update_type, component, image, crc32=None, on_progress=None) -> StepResult` | Start, chunks until `received_bytes` equals the size, commit, wait for idle. Any failure after the start sends `FirmwareUpdateAbort` |
+| `upload_component(sdk, update_type, component, image, crc32=None, on_progress=None) -> StepResult` | Start, chunks until `received_bytes` equals the size, commit, wait for idle. Any failure after the start, and a start that leaves the session in `error`, sends `FirmwareUpdateAbort` |
 | `wait_idle(sdk, timeout_s, step="", on_progress=None, total=0) -> Optional[str]` | Polls `FirmwareUpdateStatus` until `"idle"`. Returns `None`, or the reason (`"error"` state, status failure, timeout) |
 | `radar_uptime(ip, timeout_s=1.5, discover=None) -> Optional[int]` | Discovery `scan_status.uptime_seconds` of the radar at `ip` (the value `wait_for_restart` compares), or `None` when it does not answer |
 | `wait_for_restart(ip, uptime_before, timeout_s=120.0, interval_s=0.5, discover=None) -> Optional[dict]` | Sends Discovery to `ip` until it answers with an uptime lower than `uptime_before`. Returns the Discovery record, or `None` after `timeout_s` |
@@ -1184,10 +1195,10 @@ if e2e and e2e["ok"]:
 | `strip_e2e(frame, validate=True, expected_data_id=None)` | Returns `(e2e, body)`. `e2e` adds `length_ok`, `data_id_ok`, `crc_zero`, `crc_ok` (with `validate`; CRC-64/XZ when the high word is not 0), `ok` and `generation` (`INTERFACE_GEN_*`). A failed check logs a warning and keeps the body |
 | `build_e2e_header(data_id, counter, payload)` | Builds a 20B E2E header with the computed CRC |
 | `SomeipTpReassembler(max_payload_size, max_sessions=8, max_segment_size=1392)` | Bounded, session-aware UDP SOME/IP-TP reassembly. `feed(tp_header, payload, session_id)` returns the complete payload or `b""`; `reset(session_id=None)` discards state |
-| `parse_rdi_frame(payload)` | Parses the 36B RDI header (Common Header fields, `radial_velocity_begin/end`, `detections_capability`, `num_detections`, `det_start`). `None` when the length does not match the count |
+| `parse_rdi_frame(payload)` | Parses the 36B RDI header (ISO23150 Header fields, `radial_velocity_begin/end`, `detections_capability`, `num_detections`, `det_start`). `None` when the length does not match the count |
 | `parse_rdi_detection(payload, det_start, index)` | Parses one 51B detection |
-| `parse_shi(payload)` | Parses a SHII payload: the whole Common Header (including `data_qualifier`) and the health fields |
-| `parse_spi(payload)` | Parses an SPI payload: the whole Common Header, pose, FoV segments, recognisable object types and reference target types |
+| `parse_shi(payload)` | Parses a SHII payload: the whole ISO23150 Header (including `data_qualifier`) and the health fields |
+| `parse_spi(payload)` | Parses an SPI payload: the whole ISO23150 Header, pose, FoV segments, recognisable object types and reference target types |
 | `build_csii_payload(...)` | Serializes a 79B CSII payload (interface version 1.1.0, `sensor_id` default 1) |
 | `build_csii_frame(payload, counter, session_id)` | Wraps a CSII payload with E2E and SOME/IP headers (115B frame) |
 

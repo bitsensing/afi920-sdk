@@ -21,13 +21,13 @@ enum AfiError {
     kSensorError    = -8,
     kInternalError  = -9,
     kNotSupported   = -10,  ///< SDK feature unavailable, or radar NOT_SUPPORTED (0x05)
-    kBusy           = -11,  ///< Radar BUSY (0x08): request rate above 200 per second
+    kBusy           = -11,  ///< Radar BUSY (0x08): request rate above 200 per second, a GetFaultLog flash job, or a stored-setting write within 3 s of boot; retry
     kSessionRequired = -12, ///< Radar SESSION_REQUIRED (0x0C): enter the access mode first
     kAccessDenied   = -13,  ///< Radar ACCESS_DENIED (0x0D): precondition not met
     kInvalidState   = -14,  ///< Radar INVALID_STATE (0x0E): chained step out of order
 };
 
-/// Radar return codes (System Spec §6), sent in the SOME/IP header and the
+/// Radar return codes (Interface Overview §4), sent in the SOME/IP header and the
 /// JSON body of every Config API response.
 enum AfiReturnCode {
     kRcSuccess               = 0x00,
@@ -97,7 +97,7 @@ inline const char* AfiErrorStr(int code) {
         case kSensorError:    return "Sensor returned error";
         case kInternalError:  return "Internal error";
         case kNotSupported:   return "Not supported";
-        case kBusy:           return "Sensor busy (request rate limit)";
+        case kBusy:           return "Sensor busy (rate limit, flash job or boot settings read), retry";
         case kSessionRequired: return "Access mode required (SetMode)";
         case kAccessDenied:   return "Access denied by sensor";
         case kInvalidState:   return "Invalid state for this step";

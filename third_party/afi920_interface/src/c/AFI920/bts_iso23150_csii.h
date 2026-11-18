@@ -2,8 +2,9 @@
  * @file bts_iso23150_csii.h
  * @brief Common Sensor Input Interface (CSII) deserialization for ISO 23150 - AFI920
  *
- * Host -> Radar direction. The radar consumes vehicle state, sensor operation
- * command, and environmental time published by the host every 100ms.
+ * Host -> Radar direction. The host publishes vehicle state, sensor operation
+ * command, and environmental time every 100ms; the radar stores the received
+ * record only (docs/04_CSII_Sensor_Input.md).
  *
  * Wire format: 79 bytes fixed (NumberOfValidServingSensors = 1 by convention).
  * Endianness: little-endian payload (ARM native).
@@ -139,7 +140,7 @@ int bts_csii_serialize(const bts_csii_message_t* msg,
  *  - interface_id == 0x0E (IID_CommonSensorInput)
  *  - num_valid_serving_sensors == 1
  *
- * @param buffer      Wire payload (CSII portion, after the 16B SOME/IP header)
+ * @param buffer      Wire payload (CSII portion, after the 16B SOME/IP header and the 20B E2E header)
  * @param buffer_size Buffer size (must be == 79)
  * @param msg         Output message
  * @return BTS_ISO23150_OK on success, negative bts_iso23150_error_t on failure

@@ -18,6 +18,7 @@
 #include "protocol/e2e.h"
 #include "protocol/csii_builder.h"
 #include "protocol/rdi_parser.h"
+#include "protocol/rdi_assembler.h"
 #include "protocol/shi_parser.h"
 #include "protocol/spi_parser.h"
 
@@ -82,11 +83,19 @@ private:
     // (length, Data ID, CRC, zero CRC) is logged as a rate-limited warning
     // and the frame is still delivered; *e2e_valid reports the result.
     // Returns false only when the frame is shorter than the E2E header, or
-    // when e2e_strict is set and the check failed.
+    // when e2e_strict is set and the check failed. The generation comes from
+    // the E2E header refined by the ISO23150 Header after it; a body without
+    // a ISO23150 Header (RDI chunk) passes its generation in known_generation.
+    // allow_zero_crc applies an exception to Interface Overview §3.2.5 for a
+    // stream whose sender may leave the CRC out: a zero CRC field passes on
+    // the Data ID and Length checks.
     bool ConsumeE2eHeader(const uint8_t*& payload, size_t& payload_len,
                           const char* stream_name, uint32_t expected_data_id,
                           uint64_t& failure_count,
-                          E2eHeader* parsed_header, bool* e2e_valid);
+                          E2eHeader* parsed_header, bool* e2e_valid,
+                          AfiInterfaceGeneration known_generation =
+                              AfiInterfaceGeneration::kUnknown,
+                          bool allow_zero_crc = false);
 
     // Deliver a complete transport-normalized SOME/IP payload before the
     // version-specific parser sees it.
@@ -97,9 +106,16 @@ private:
                             size_t iso_payload_len,
                             uint64_t recv_timestamp_ns,
                             const E2eHeader* e2e,
-                            bool e2e_valid);
+                            bool e2e_valid,
+                            const SomeipHeader& someip);
 
-    // ─── RDI slot loss from the E2E Counter (System Spec §8.2) ───
+    // ─── RDI ───
+    // Interface v1.2.0 header (0x8002) and chunk (0x8100 + k) messages.
+    void ProcessRdiChunked(const uint8_t* data, size_t len, const SomeipHeader& hdr);
+    // A closed v1.2.0 scan, or the scan of one single-format message.
+    void DeliverRdiScan(AfiRdiFrame& frame);
+
+    // ─── RDI slot loss from the E2E Counter (Interface Overview §3.2.3) ───
     void TrackRdiLoss(uint32_t e2e_counter);
 
     // ─── Platform ───
@@ -141,6 +157,8 @@ private:
     // ─── Protocol ───
     SomeipTpReassembler rdi_tp_{kAfiWirePayloadSafetyLimit};
     RdiParser rdi_parser_;
+    RdiScanAssembler rdi_assembler_;
+    RdiScanAssembler::Emit rdi_emit_;   // loss tracking + DeliverRdiScan
     ShiParser shi_parser_;
     SpiParser spi_parser_;
 
@@ -156,9 +174,9 @@ private:
     uint32_t last_rdi_e2e_counter_ = 0;
     bool     first_rdi_ = true;
 
-    // E2E check failures per stream (indexed by AfiStreamKind). Each entry
+    // E2E check failures per stream (indexed like AfiStreamKind). Each entry
     // is touched only by its own receiver thread.
-    uint64_t e2e_failures_[3] = {0, 0, 0};
+    uint64_t e2e_failures_[5] = {0, 0, 0, 0, 0};
 };
 
 } // namespace afi

@@ -3,9 +3,9 @@ Config API transport behaviour of the Python ConfigClient (no sensor).
 
 A scripted fake radar answers each request; the tests pin what the client does
 when an answer is wrong, late or missing. The contract is Config API Overview
-§1 and System Spec §6/§7: the radar echoes Service/Method/Client/Session, uses
-protocol and interface version 0x01, puts the same return code in the header
-and the JSON body, and every frame carries the 20B E2E header.
+§2.1 and Interface Overview §4/§3.2: the radar echoes Service/Method/Client/
+Session, uses protocol and interface version 0x01, puts the same return code
+in the header and the JSON body, and every frame carries the 20B E2E header.
 
 Copyright (c) 2026 bitsensing Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
@@ -32,7 +32,8 @@ from afi_sdk.someip import (  # noqa: E402
     MAX_REQUEST_BODY, METHOD_GET_DEVICE_INFO, METHOD_SET_ROTATION,
     METHOD_RESTART, METHOD_RESET_ALL_SETTINGS, METHOD_FW_SWITCH_SLOT,
     METHOD_FW_UPDATE_REBOOT, RC_NOT_SUPPORTED, INTERFACE_GEN_UNKNOWN,
-    INTERFACE_GEN_V1_0, INTERFACE_GEN_V1_1, discovery_generation,
+    INTERFACE_GEN_V1_0, INTERFACE_GEN_V1_1, INTERFACE_GEN_V1_2,
+    discovery_generation,
 )
 
 
@@ -81,9 +82,10 @@ class FakeRadar:
     included, with LEGACY_DEVICE_INFO and records all of them.
     """
 
-    def __init__(self, script, legacy=False):
+    def __init__(self, script, legacy=False, probe_data=None):
         self.script = script
         self.legacy = legacy
+        self.probe_data = probe_data or {"serial_number": "probe"}
         self.requests = []
         self.connections = 0
         self.probes = 0
@@ -124,7 +126,7 @@ class FakeRadar:
                         conn.sendall(legacy_reply(req, LEGACY_DEVICE_INFO))
                         continue
                     if probe:
-                        conn.sendall(ok_reply(req, {"serial_number": "probe"}))
+                        conn.sendall(ok_reply(req, self.probe_data))
                         continue
                     self.requests.append(req)
                     out = self.script(len(self.requests) - 1, req)
@@ -154,6 +156,16 @@ def test_probe_finds_a_v110_sensor():
     assert client.connect()
     assert client.interface_generation == INTERFACE_GEN_V1_1
     assert client.connected and radar.probes == 1 and radar.requests == []
+    client.close()
+    radar.close()
+
+
+def test_probe_finds_a_v120_sensor_by_if_version():
+    radar = FakeRadar(lambda i, req: ok_reply(req),
+                      probe_data={"serial_number": "probe", "if_version": "1.2.0"})
+    client = ConfigClient("127.0.0.1", radar.port, timeout=2.0)
+    assert client.connect()
+    assert client.interface_generation == INTERFACE_GEN_V1_2
     client.close()
     radar.close()
 
@@ -307,6 +319,36 @@ def test_discovery_generation():
     assert discovery_generation({"software_version": "3.1.1",
                                  "m72_ptp_state": "SLAVE"}) == INTERFACE_GEN_V1_1
     assert discovery_generation({"software_version": "0.0.0"}) == INTERFACE_GEN_UNKNOWN
+
+
+def test_device_info_vlan_and_fault_log_page():
+    erased = "f" * 256
+
+    def script(i, req):
+        if req["method"] == METHOD_GET_DEVICE_INFO:
+            return ok_reply(req, {"serial_number": "s", "vlan_id": 12})
+        body = json.loads(req["body"])
+        return ok_reply(req, {"ring": body["ring"], "slots": 1024, "head": 1,
+                              "boot_count": 2, "slot": body["slot"],
+                              "records": [erased] * body["count"]})
+
+    radar = FakeRadar(script)
+    sdk = AfiSdk()
+    assert sdk.init(AfiSdkConfig(sensor_ip="127.0.0.1", config_port=radar.port,
+                                 timeout=2.0)) == OK
+    assert sdk.get_device_info()["vlan_id"] == 12
+    page = sdk.get_fault_log("sample", slot=500, count=3)
+    assert json.loads(radar.requests[-1]["body"]) == {
+        "ring": "sample", "slot": 500, "count": 3}
+    assert page["slot"] == 500 and page["records"] == [erased] * 3
+    sent = len(radar.requests)
+    for args in (("other",), ("fault", 0, 0), ("fault", 0, 13), ("fault", -1),
+                 ("fault", 0, True), ("fault", 1.5)):
+        assert sdk.get_fault_log(*args) is None
+        assert sdk.last_error == INVALID_PARAM
+    assert len(radar.requests) == sent
+    sdk.close()
+    radar.close()
 
 
 def test_wrong_session_echo_is_a_protocol_error_and_drops_the_connection():

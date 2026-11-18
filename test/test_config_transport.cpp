@@ -3,7 +3,7 @@
  * @brief Config API transport behaviour against a scripted loopback radar
  *
  * Pins what the client does when an answer is wrong, late, or refused
- * (Config API Overview §1, System Spec §6): the response must echo
+ * (Config API Overview §2.1, Interface Overview §4): the response must echo
  * Message/Client/Session ID with version 0x01; any mismatch, timeout, or
  * lost connection drops the socket so a late answer is never read as the
  * next one, and the next call reconnects. Radar return codes map to
@@ -135,6 +135,11 @@ public:
     uint16_t port() const { return port_; }
     int connections() const { return connections_.load(); }
     int probes() const { return probes_.load(); }
+    /// Body of the probe answer (v1.1.0 and later radars).
+    void SetProbeJson(std::string json) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        probe_json_ = std::move(json);
+    }
     size_t requests() {
         std::lock_guard<std::mutex> lock(mutex_);
         return seen_.size();
@@ -164,7 +169,10 @@ private:
                 if (probe) ++probes_;
                 if (probe && !legacy_) {
                     Reply r;
-                    r.json = R"({"return_code":0,"data":{"serial_number":"probe"}})";
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        r.json = probe_json_;
+                    }
                     const auto f = frame_for(req, r);
                     ::send(peer, reinterpret_cast<const char*>(f.data()),
                            static_cast<int>(f.size()), 0);
@@ -199,6 +207,7 @@ private:
     std::function<Reply(int, const Request&)> script_;
     bool legacy_ = false;
     std::string legacy_json_;
+    std::string probe_json_ = R"({"return_code":0,"data":{"serial_number":"probe"}})";
     socket_t listener_ = kInvalidSocket;
     uint16_t port_ = 0;
     std::atomic<bool> stop_{false};
@@ -228,6 +237,16 @@ TEST(probe_finds_a_v110_sensor) {
     CHECK(tcp.IsConnected());
     CHECK(radar.probes() == 1 && radar.requests() == 0);
     PASS("probe_finds_a_v110_sensor");
+}
+
+TEST(probe_finds_a_v120_sensor_by_if_version) {
+    FakeRadar radar([](int, const Request&) { return Reply{}; });
+    radar.SetProbeJson(R"({"return_code":0,"data":{"serial_number":"probe",)"
+                       R"("if_version":"1.2.0"}})");
+    TcpClient tcp;
+    CHECK(tcp.Connect("127.0.0.1", radar.port(), 2000) == kTcpOk);
+    CHECK(tcp.Generation() == AfiInterfaceGeneration::kV1_2);
+    PASS("probe_finds_a_v120_sensor_by_if_version");
 }
 
 TEST(legacy_sensor_gets_no_request_after_the_probe) {
@@ -440,8 +459,14 @@ TEST(v110_fields_parse) {
     FakeRadar radar([](int, const Request& req) {
         Reply r;
         if (req.method == 0x0040) {
-            r.json = R"({"return_code":0,"data":{"snr_threshold_db":5.50,)"
-                     R"("cfar_table_first_frame":[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5]}})";
+            r.json = R"({"return_code":0,"data":{)"
+                     R"("cfar_table_first_frame":[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,9]}})";
+        } else if (req.method == 0x0012) {
+            r.json = R"({"return_code":0,"data":{"combined_state":"NORMAL",)"
+                     R"("combined_state_code":1,"status_snapshot_stale":true,)"
+                     R"("status_stale_cycles":4,"faults":[{"id":"0x020",)"
+                     R"("name":"TEMP_RFE_CRITICAL","source":"RADAR",)"
+                     R"("level":"RESET","level_code":2,"active":false}]}})";
         } else if (req.method == 0x0050) {
             r.json = R"({"return_code":0,"data":{"profile":0,"state":"SLAVE",)"
                      R"("grid_offset_ns":-120,"grid_state":"CONVERGING"}})";
@@ -457,8 +482,13 @@ TEST(v110_fields_parse) {
     ConfigClient cc(tcp);
     AfiDetectionThreshold th;
     CHECK(cc.GetDetectionThreshold(th) == kOk);
-    CHECK(th.snr_dB == 5.5f);
+    CHECK(th.cfar_table_first_frame.size() == 19 &&
+          th.cfar_table_first_frame[18] == 9);
     CHECK(!th.has_cfar_table_second_frame);
+    AfiDiagnosticInfo diag;
+    CHECK(cc.GetDiagnosticInfo(diag) == kOk);
+    CHECK(diag.status_snapshot_stale && diag.status_stale_cycles == 4);
+    CHECK(diag.faults.size() == 1 && diag.faults[0].source == "RADAR");
     AfiPtpConfig ptp;
     CHECK(cc.GetPtpConfig(ptp) == kOk);
     CHECK(ptp.grid_offset_ns == -120 && ptp.grid_state == "CONVERGING");
@@ -470,11 +500,69 @@ TEST(v110_fields_parse) {
     bool restart = false;
     CHECK(cc.SetRangeMode(AfiRangeMode::kUltraDualRange, &restart) == kOk && restart);
     CHECK(cc.SetRangeMode(static_cast<AfiRangeMode>(7)) == kInvalidParam);
-    th.snr_dB = 7.25f;
+    th.cfar_table_first_frame[0] = 1;
     CHECK(cc.SetDetectionThreshold(th) == kOk);
-    th.snr_dB = 9.5f;
+    th.cfar_table_first_frame[0] = 10;
     CHECK(cc.SetDetectionThreshold(th) == kInvalidParam);
     PASS("v110_fields_parse");
+}
+
+TEST(device_info_vlan_and_fault_log_page) {
+    // GetFaultLog record 0 is the Device & Status §01.7 example; record 1 is erased.
+    static const std::string kRec0 =
+        "464c0101ad142249010000000100000006000000000000000100020d00000000"
+        "3932353165343462000000000000000070302003c409c409c409c4090410400b"
+        "400b800b400bc00b000000000100004000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    static const std::string kErased(2 * kAfiFaultLogSlotSize, 'f');
+    static std::string fault_log_body;
+    FakeRadar radar([](int, const Request& req) {
+        Reply r;
+        if (req.method == 0x0010) {
+            r.json = R"({"return_code":0,"data":{"serial_number":"s","vlan_id":12}})";
+        } else if (req.method == 0x0017) {
+            fault_log_body = req.body;
+            if (req.body.find("\"sample\"") != std::string::npos) {
+                r.json = R"({"return_code":0,"data":{"ring":"sample","slots":512,"head":0,)"
+                         R"("boot_count":1,"slot":510,"records":["0g"]}})";
+            } else {
+                r.json = std::string(R"({"return_code":0,"data":{"ring":"fault","slots":1024,)"
+                                     R"("head":1,"boot_count":2,"slot":0,"records":[")") +
+                         kRec0 + R"(",")" + kErased + R"("]}})";
+            }
+        }
+        return r;
+    });
+    TcpClient tcp;
+    CHECK(tcp.Connect("127.0.0.1", radar.port(), 2000) == kTcpOk);
+    ConfigClient cc(tcp);
+    AfiDeviceInfo info;
+    CHECK(cc.GetDeviceInfo(info) == kOk);
+    CHECK(info.vlan_id == 12);
+
+    AfiFaultLogPage page;
+    CHECK(cc.GetFaultLog(AfiFaultLogRing::kFault, 0, 2, page) == kOk);
+    CHECK(fault_log_body.find("\"ring\":\"fault\"") != std::string::npos);
+    CHECK(fault_log_body.find("\"count\":2") != std::string::npos);
+    CHECK(page.ring == AfiFaultLogRing::kFault);
+    CHECK(page.slots == 1024 && page.head == 1 && page.boot_count == 2 && page.slot == 0);
+    CHECK(page.records.size() == 2);
+    CHECK(page.records[0].size() == kAfiFaultLogSlotSize);
+    CHECK(page.records[0][0] == 0x46 && page.records[0][1] == 0x4c);   // magic "FL"
+    CHECK(page.records[0][4] == 0xad && page.records[0][7] == 0x49);   // crc32
+    CHECK(page.records[1].size() == kAfiFaultLogSlotSize && page.records[1][127] == 0xff);
+
+    // A record that is not 256 hex digits is a protocol error.
+    CHECK(cc.GetFaultLog(AfiFaultLogRing::kSample, 510, 12, page) == kProtocolError);
+    CHECK(fault_log_body.find("\"slot\":510") != std::string::npos);
+
+    // count outside 1..12 is refused before sending.
+    const size_t sent = radar.requests();
+    CHECK(cc.GetFaultLog(AfiFaultLogRing::kFault, 0, 0, page) == kInvalidParam);
+    CHECK(cc.GetFaultLog(AfiFaultLogRing::kFault, 0, 13, page) == kInvalidParam);
+    CHECK(cc.GetFaultLog(static_cast<AfiFaultLogRing>(2), 0, 1, page) == kInvalidParam);
+    CHECK(radar.requests() == sent);
+    PASS("device_info_vlan_and_fault_log_page");
 }
 
 TEST(firmware_low_level) {

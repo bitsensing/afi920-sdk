@@ -28,7 +28,7 @@ SUCCESS, INVALID_PARAM, SESSION_REQUIRED, ACCESS_DENIED, INVALID_STATE = 0, 1, 0
 
 class FakeUpdateRadar:
     def __init__(self, active="A", legacy_commit_moves_marker=False,
-                 corrupt_component=None, fail_chunk_at=None):
+                 corrupt_component=None, fail_chunk_at=None, fail_start=False):
         self.mode = 0
         self.active = active
         self.valid = {"A": True, "B": True}
@@ -41,6 +41,7 @@ class FakeUpdateRadar:
         self.legacy = legacy_commit_moves_marker
         self.corrupt = corrupt_component
         self.fail_chunk_at = fail_chunk_at
+        self.fail_start = fail_start
         self.log = []
         self.chunks = 0
         self.last_result = None
@@ -85,6 +86,11 @@ class FakeUpdateRadar:
         if method == 0x0080:
             if self.state != "idle":
                 return self._reply(INVALID_STATE, {"state": self.state})
+            if self.fail_start:
+                # the medium refused the erase: the session stays in error
+                self.state = "error"
+                return self._reply(INVALID_STATE, {"state": "error",
+                                                   "error_message": "erase failed"})
             crc = payload.get("crc32")
             assert isinstance(crc, str) and crc.startswith("0x"), crc
             target = ("B" if self.active == "A" else "A") \
@@ -208,6 +214,14 @@ def test_chunk_refusal_aborts():
     res = fw.update(sdk_for(radar), firmware=images())
     assert not res.ok and "CHUNK failed" in res.error
     assert radar.log[-1] == 0x0084
+
+
+def test_start_left_in_error_is_aborted():
+    radar = FakeUpdateRadar(fail_start=True)
+    res = fw.update(sdk_for(radar), firmware=images())
+    assert not res.ok and "START failed" in res.error
+    assert radar.log[-2:] == [0x0083, 0x0084]
+    assert radar.state == "idle"
 
 
 def test_legacy_marker_move_is_put_back_between_components():

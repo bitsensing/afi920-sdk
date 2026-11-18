@@ -30,15 +30,17 @@ namespace afi {
 /**
  * @brief Interface generation a sensor speaks (afi920_interface)
  *
- * The SDK receives RDI, SHII and SPI from both generations and sends CSII to
- * both. The Config API is interface v1.1.0 only: on a v1.0.x sensor every
+ * The SDK receives RDI, SHII and SPI from every generation and sends CSII to
+ * each. RDI arrives as one message on v1.0.x and v1.1.0 and as header and
+ * chunk messages on v1.2.0; the SDK delivers both as one AfiRdiFrame per scan.
+ * The Config API is interface v1.1.0 and later: on a v1.0.x sensor every
  * Config API call returns kNotSupported without sending a request.
- * Compatibility with v1.0.x is limited to this SDK release.
  */
 enum class AfiInterfaceGeneration : uint8_t {
     kUnknown = 0,  ///< Not determined yet
     kV1_0    = 1,  ///< Interface v1.0.x (firmware 3.0.0 to 3.1.0)
     kV1_1    = 2,  ///< Interface v1.1.0 (firmware 3.1.1)
+    kV1_2    = 3,  ///< Interface v1.2.x (`if_version` key, RDI header/chunk format)
 };
 
 /**
@@ -55,14 +57,31 @@ struct AfiRdiFrame {
     uint32_t          frame_seq = 0;      ///< SDK internal frame sequence number
     std::vector<bts_rdi_detection_t> detections_storage; ///< Detection storage
 
-    // E2E outcome (System Spec §7.5). A failed check is delivered unless
+    // E2E outcome (Interface Overview §3.2.5). A failed check is delivered unless
     // AfiSdkConfig::e2e_strict, so a consumer can tell the two apart here.
-    uint32_t e2e_counter = 0;             ///< E2E Counter (send slot, §8.2)
+    uint32_t e2e_counter = 0;             ///< E2E Counter (send slot, §3.2.3)
     bool     e2e_checked = false;         ///< validate_e2e was on
     bool     e2e_valid = false;           ///< Length, Data ID and CRC checks passed
-    /// Generation of the sender, from the E2E header: v1.1.0 puts CRC-32 in
-    /// the low word with the high word 0, v1.0.x a CRC-64/XZ in both words.
+    /// Generation of the sender. The E2E header separates v1.0.x (CRC-64/XZ
+    /// in both words) from later ones (CRC-32, high word 0); the RDI framing
+    /// and the ISO23150 Header InterfaceVersionID mark v1.2.x.
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
+
+    /// Interface v1.2.0 header/chunk scan (Interface Overview §3.2.3). chunk_count is
+    /// the List Layout ChunkCount and chunks_received the chunk messages
+    /// used. A scan with missing chunks is delivered with the detections it
+    /// has, so message.num_detections can be below announced_detections (the
+    /// header's NumberOfValidDetections). The single-message format of v1.0.x
+    /// and v1.1.0 leaves both chunk counts 0.
+    uint16_t chunk_count = 0;
+    uint16_t chunks_received = 0;
+    uint16_t announced_detections = 0;
+
+    /// True when every announced detection is present.
+    bool IsComplete() const {
+        return chunks_received == chunk_count &&
+               message.num_detections == announced_detections;
+    }
 
     AfiRdiFrame() = default;
 
@@ -87,7 +106,10 @@ struct AfiRdiFrame {
           e2e_counter(other.e2e_counter),
           e2e_checked(other.e2e_checked),
           e2e_valid(other.e2e_valid),
-          generation(other.generation) {
+          generation(other.generation),
+          chunk_count(other.chunk_count),
+          chunks_received(other.chunks_received),
+          announced_detections(other.announced_detections) {
         RebindStorage();
     }
 
@@ -101,6 +123,9 @@ struct AfiRdiFrame {
             e2e_checked = other.e2e_checked;
             e2e_valid = other.e2e_valid;
             generation = other.generation;
+            chunk_count = other.chunk_count;
+            chunks_received = other.chunks_received;
+            announced_detections = other.announced_detections;
             RebindStorage();
         }
         return *this;
@@ -114,7 +139,10 @@ struct AfiRdiFrame {
           e2e_counter(other.e2e_counter),
           e2e_checked(other.e2e_checked),
           e2e_valid(other.e2e_valid),
-          generation(other.generation) {
+          generation(other.generation),
+          chunk_count(other.chunk_count),
+          chunks_received(other.chunks_received),
+          announced_detections(other.announced_detections) {
         RebindStorage();
         other.RebindStorage();
     }
@@ -129,6 +157,9 @@ struct AfiRdiFrame {
             e2e_checked = other.e2e_checked;
             e2e_valid = other.e2e_valid;
             generation = other.generation;
+            chunk_count = other.chunk_count;
+            chunks_received = other.chunks_received;
+            announced_detections = other.announced_detections;
             RebindStorage();
             other.RebindStorage();
         }
@@ -156,12 +187,13 @@ using AfiSpiMessage = bts_spi_message_t;
  */
 struct AfiStreamMeta {
     uint64_t recv_timestamp_ns = 0;   ///< Host receive time (steady clock)
-    uint32_t e2e_counter = 0;         ///< E2E Counter (send slot, §8.2)
+    uint32_t e2e_counter = 0;         ///< E2E Counter (send slot, §3.2.3)
     bool e2e_checked = false;         ///< validate_e2e was on
     bool e2e_valid = false;           ///< Length, Data ID and CRC checks passed
     /// Generation of the sender, from the E2E header (see AfiRdiFrame).
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
 };
+
 
 // ─── Enums ───
 
@@ -201,7 +233,7 @@ inline const char* AfiRangeModeName(AfiRangeMode mode) {
  * set timestamp_ns to override the measurement timestamp (0 = host clock).
  */
 struct AfiVehicleInput {
-    uint8_t  sensor_id = 1;           ///< Common Header SensorID (default 1)
+    uint8_t  sensor_id = 1;           ///< ISO23150 Header SensorID (default 1)
     uint64_t timestamp_ns = 0;                  ///< Measurement time (0 = host clock now)
 
     bts_csii_somc_t somc = BTS_CSII_SOMC_NORMAL_MODE;  ///< Sensor operation mode command
@@ -244,6 +276,7 @@ struct AfiSensorInfo {
     std::string source_ip;          ///< Address the response came from
     std::string subnet_mask;
     std::string gateway;
+    uint16_t    vlan_id = 0;           ///< VLAN ID of this boot (0 = no VLAN)
 
     // Ports
     uint16_t    port = 30500;          ///< Config API TCP port
@@ -267,30 +300,39 @@ struct AfiSensorInfo {
     float offset_x = 0.0f, offset_y = 0.0f, offset_z = 0.0f;
     float yaw_deg = 0.0f, pitch_deg = 0.0f, roll_deg = 0.0f;
 
-    // Range mode
+    // Operation mode: the SHII SensorOperationMode with the current access
+    // mode applied, not the stored GetRangeMode value. 0..6 is the running
+    // range mode; 10, 20, 21, 100 and 200 (Degradation, Diagnostic,
+    // Programming, Fault, Initialising) are outside AfiRangeMode, so
+    // AfiRangeModeName() gives "UNKNOWN" and range_mode_name holds the
+    // radar's name ("DEGRADATION" .. "INITIALISING").
     AfiRangeMode range_mode = AfiRangeMode::kDualRange;
     std::string range_mode_name;
 
     // Operation status
     bool        radar_active = false;
-    std::string radar_mode;            ///< "normal" or "dummy" (build config)
+    std::string radar_mode;            ///< "normal"
 
     // Scan status
     uint32_t    scan_index = 0;        ///< Current MessageCounter
     uint32_t    uptime_seconds = 0;
 
     // PTP status
-    std::string ptp_state;             ///< "INIT" / "SLAVE" / "MASTER"
+    std::string ptp_state;             ///< "INIT" / "SLAVE"
     int64_t     ptp_offset_ns = 0;
 
-    /// Interface generation from the response keys: driver_hash exists only
-    /// on v1.0.x, the m72_* keys only on v1.1.0.
+
+    /// Interface version the radar implements ("1.2.0"); interface v1.2.0
+    /// adds the key, so it is empty on earlier sensors.
+    std::string if_version;
+    /// Interface generation: if_version on v1.2.0 and later; otherwise
+    /// driver_hash exists only on v1.0.x and the m72_* keys only on v1.1.0.
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
 };
 
 // ─── Config API Response Types ───
 
-/// Radar outcome of the last Config API call (System Spec §6).
+/// Radar outcome of the last Config API call (Interface Overview §4).
 struct AfiSensorResult {
     int return_code = -1;        ///< Radar return code (AfiReturnCode); -1 when no response arrived
     std::string return_name;     ///< Radar's name for return_code, e.g. "SESSION_REQUIRED"
@@ -303,9 +345,11 @@ struct AfiSensorResult {
 struct AfiDeviceInfo {
     std::string serial_number;
     std::string mac_address;
+    uint16_t vlan_id = 0;           ///< VLAN ID of this boot (0 = no VLAN); GetNetworkConfig reports the stored one
     std::string model_name;
     std::string hw_version;
     std::string software_version;   ///< Unified SW version
+    std::string if_version;         ///< Interface version ("1.2.0"); empty before v1.2.0
     std::string bootloader_hash;    ///< git short hash (8 hex)
     std::string fw_hash;
 };
@@ -322,28 +366,48 @@ struct AfiSensorStatus {
 struct AfiFaultEntry {
     std::string id;           ///< hex string, e.g. "0x012"
     std::string name;
-    std::string source;       ///< "A53" or "M7"
+    std::string source;       ///< "RADAR"
     std::string level;
     uint8_t level_code = 0;
     bool active = false;
 };
 
 struct AfiDiagnosticInfo {
-    std::string combined_state;       ///< A53+M7 worst-case state
+    std::string combined_state;       ///< "INIT" / "NORMAL"
     uint8_t combined_state_code = 0;
     std::string max_fault_level;
     uint8_t max_fault_level_code = 0; ///< 0=NONE, 1=RECORD, 2=RESET
     std::string trigger_fault_id;     ///< hex string
     uint16_t active_fault_count = 0;
-    bool m7_snapshot_stale = false;
-    uint32_t m7_stale_cycles = 0;
-    std::vector<AfiFaultEntry> faults;
+    bool status_snapshot_stale = false;   ///< Status not updated for 300 ms or more
+    uint32_t status_stale_cycles = 0;     ///< Consecutive 100 ms cycles without an update
+    std::vector<AfiFaultEntry> faults;    ///< All 10 radar faults
 };
 
 struct AfiCommandHistory {
     uint32_t total_commands = 0;
     uint32_t success_count = 0;
     uint32_t fail_count = 0;
+};
+
+/// Ring that GetFaultLog (0x0017) reads
+enum class AfiFaultLogRing : uint8_t {
+    kFault  = 0,   ///< "fault": 1024 slots
+    kSample = 1,   ///< "sample": system information samples, 512 slots
+};
+
+static constexpr size_t  kAfiFaultLogSlotSize = 128;  ///< Bytes per slot
+static constexpr uint8_t kAfiFaultLogPageMax  = 12;   ///< Slots per request
+
+/// One GetFaultLog page. Slots are raw and unchecked: the host checks magic,
+/// seq and crc32 (Device & Status §01.7) and orders the records by seq.
+struct AfiFaultLogPage {
+    AfiFaultLogRing ring = AfiFaultLogRing::kFault;
+    uint32_t slots = 0;        ///< Slots in the ring
+    uint32_t head = 0;         ///< Next slot the radar writes
+    uint32_t boot_count = 0;   ///< Boot number of this boot
+    uint32_t slot = 0;         ///< First slot of records
+    std::vector<std::vector<uint8_t>> records;  ///< kAfiFaultLogSlotSize bytes each; an erased slot is all 0xFF
 };
 
 // Category 2: Network (0x002x)
@@ -364,7 +428,7 @@ enum class AfiStreamKind : uint8_t {
 /**
  * @brief Parser-independent, reassembled stream payload.
  *
- * For RDI/SHII/SPI, `payload` starts at the 20-byte E2E header and
+ * For the ISO 23150 streams, `payload` starts at the 20-byte E2E header and
  * contains the complete ISO 23150 payload that follows it.  The callback is
  * emitted after SOME/IP validation, TP reassembly, and E2E verification, but
  * before the version-specific domain parser.  A failed E2E check does not
@@ -381,8 +445,15 @@ struct AfiWirePayloadFrame {
     bool e2e_checked = false;         ///< CRC verification was requested
     bool e2e_valid = false;           ///< Length, Data ID and CRC checks passed
     std::vector<uint8_t> payload;     ///< Exact reassembled SOME/IP payload
-    /// Generation of the sender, from the E2E header (see AfiRdiFrame).
+    /// Generation of the sender (see AfiRdiFrame).
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
+    /// SOME/IP Event ID and Interface Version of the message. Interface
+    /// v1.2.0 sends one RDI scan as header A and header B (0x8002) and chunk
+    /// k (0x8100 + k) under Interface Version 0x02, one payload each; a chunk
+    /// carries its Chunk Header MessageCounter in message_counter and no
+    /// sensor timestamp.
+    uint16_t event_id = 0;
+    uint8_t someip_interface_version = 0;
 };
 
 /**
@@ -411,9 +482,7 @@ struct AfiDetectionThreshold {
     static constexpr std::size_t kCfarTableLength = 19;
     static constexpr uint8_t kDefaultCfarLevel = 5;
 
-    /// Wire key is `snr_threshold_db`: a level in 1..9, not a physical dB
-    /// value. Fractions are stored as sent; GET answers with 2 decimals.
-    float snr_dB = 5.0f;
+    /// CFAR level (1..9) per range segment of the stored range mode.
     std::vector<uint8_t> cfar_table_first_frame =
         std::vector<uint8_t>(kCfarTableLength, kDefaultCfarLevel);
     std::vector<uint8_t> cfar_table_second_frame =
@@ -423,24 +492,19 @@ struct AfiDetectionThreshold {
     bool has_cfar_table_second_frame = true;
 };
 
-/// Detection filter toggles (interface v1.1.0, 8 filters). Defaults follow
-/// 04_Detection.md. ego_specular, upper_structure, and wheel_microdoppler are
-/// stored by FW v3.1.1 but not built into its filter chain.
+/// Detection filter toggles (5 filters). Defaults follow 04_Detection.md.
 struct AfiDetectionFilters {
-    bool filter_ego_specular = false;
     bool filter_ground_sidelobe = true;
-    bool filter_upper_structure = false;
     bool filter_multibounce_2x = true;
     bool filter_structure_multipath = true;
     bool filter_specular_mirror = true;
-    bool filter_wheel_microdoppler = false;
-    bool filter_ground_reflection = false;  ///< Ground reflection (SR subcycle)
+    bool filter_ground_reflection = false;  ///< Ground reflection
 };
 
 // Category 5: Time Sync (0x005x)
 
 /**
- * @brief PTP configuration + live sync status (GetPTPConfig)
+ * @brief PTP configuration + live PTP port state (GetPTPConfig)
  *
  * `profile` is the active boot-time profile. `configured_profile` is the
  * pending NVM selection that takes effect after restart.
@@ -451,7 +515,8 @@ struct AfiPtpConfig {
     uint8_t domain = 0;
     uint8_t priority1 = 255;          ///< Firmware constant (slave-only)
     uint8_t priority2 = 255;          ///< Firmware constant (slave-only)
-    std::string state;                ///< "INIT" / "SLAVE" / "MASTER" / "NOT_SYNCED"
+    std::string state;                ///< PTP port state "SLAVE" / "NOT_SYNCED", not the
+                                      ///< lock verdict (SHII SensorTimeSync reports lock)
     uint8_t state_code = 0;
     int64_t offset_ns = 0;
     int64_t mean_path_delay_ns = 0;
@@ -462,8 +527,9 @@ struct AfiPtpConfig {
     std::string configured_profile_name;
     bool restart_required = false;    ///< configured_profile != profile
 
-    /// System time minus PTP time (PHC). Non-zero means stream timestamps and
-    /// the transmit grid differ from PTP time by this much (Common Header).
+    /// Grid time minus system time (PHC). Non-zero means the radar's 100 ms
+    /// radiate and send grid differs from PTP time by this much. Stream
+    /// timestamps are PHC time and do not carry it.
     int64_t grid_offset_ns = 0;
     std::string grid_state;           ///< "FREE" / "HOLD" / "CONVERGING" / "ALIGNED"
 };
@@ -512,7 +578,7 @@ struct AfiOtaChunkResult {
 };
 
 struct AfiOtaStatus {
-    std::string state;            ///< "idle", "transferring", "writing", "verifying", "error"
+    std::string state;            ///< "idle", "initializing", "transferring", "writing", "verifying", "error"
     uint8_t progress_pct = 0;
     std::string current_component;
     std::string error_message;
@@ -550,7 +616,7 @@ struct AfiResetConfigDefaultsResult {
  *
  * Entry is one way, Normal -> Diagnostic -> Programming, and only a reboot
  * returns to Normal. Diagnostic opens every config SET; Programming opens the
- * firmware update chain and halts RDI/SHII/SPI.
+ * firmware update chain and halts the data streams.
  */
 enum class AfiAccessMode : uint8_t {
     kNormal      = 0,

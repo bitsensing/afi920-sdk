@@ -21,12 +21,33 @@
 
 using namespace afi;
 
+static bool port_is_free(uint16_t port) {
+    PlatformSocketInit sockets;
+    for (int type : {SOCK_DGRAM, SOCK_STREAM}) {
+        socket_t s = ::socket(AF_INET, type, 0);
+        if (s == kInvalidSocket) return false;
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(port);
+        const bool bound = ::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+        platform_close_socket(s);
+        if (!bound) return false;
+    }
+    return true;
+}
+
+// The base follows the process ID so concurrent runs stay apart. A port held
+// by another service is skipped: tailscaled keeps UDP 41641 and refuses a
+// shared bind (WSAEACCES), which failed Init for about one run in sixty.
 static uint16_t test_port(uint16_t offset = 0) {
 #ifdef _WIN32
-    return static_cast<uint16_t>(41000 + (GetCurrentProcessId() % 900) + offset);
+    uint16_t port = static_cast<uint16_t>(41000 + (GetCurrentProcessId() % 900) + offset);
 #else
-    return static_cast<uint16_t>(41000 + (::getpid() % 900) + offset);
+    uint16_t port = static_cast<uint16_t>(41000 + (::getpid() % 900) + offset);
 #endif
+    for (int i = 0; i < 4 && !port_is_free(port); ++i) port += 1000;
+    return port;
 }
 
 static std::vector<uint8_t> make_future_shi_frame() {
@@ -427,6 +448,151 @@ TEST(typed_callbacks_carry_the_e2e_verdict_and_loss_skips_failed_frames) {
     PASS("typed_callbacks_carry_the_e2e_verdict_and_loss_skips_failed_frames");
 }
 
+// Interface v1.2.0 RDI message: SOME/IP Interface Version 0x02, no TP, and
+// the E2E Data ID equal to the MessageID32.
+static std::vector<uint8_t> make_rdi_v12_frame(uint16_t event, uint32_t e2e_counter,
+                                               const std::vector<uint8_t>& body) {
+    std::vector<uint8_t> frame(kSomeipHeaderSize + kE2eHeaderSize + body.size(), 0);
+    detail::pack_be32(frame.data(), (static_cast<uint32_t>(kSomeipServiceId) << 16) | event);
+    detail::pack_be32(frame.data() + 4,
+                      static_cast<uint32_t>(8 + kE2eHeaderSize + body.size()));
+    detail::pack_be32(frame.data() + 8, 0x00010001u);
+    frame[12] = kSomeipProtocolVersion;
+    frame[13] = kSomeipInterfaceVersionRdi;
+    frame[14] = kSomeipMsgTypeNotify;
+    frame[15] = kSomeipReturnOk;
+    uint8_t* e2e = frame.data() + kSomeipHeaderSize;
+    bts_e2e_build_header(e2e, BTS_E2E_DATA_ID(event), e2e_counter,
+                         static_cast<uint32_t>(body.size()));
+    std::memcpy(e2e + kE2eHeaderSize, body.data(), body.size());
+    bts_e2e_apply_crc(e2e, e2e + kE2eHeaderSize, body.size());
+    return frame;
+}
+
+TEST(v1_2_header_and_chunk_messages_form_one_scan) {
+    AfiSdkConfig config;
+    config.sensor_ip = "127.0.0.1";  // loopback senders
+    config.enable_config_api = false;
+    config.enable_rdi = true;
+    config.enable_shi = false;
+    config.enable_spi = false;
+    config.rdi_transport = "udp";
+    config.rdi_port = test_port(60);
+    config.validate_e2e = true;
+
+    // 30 detections: chunk 0 holds 27, chunk 1 holds 3.
+    constexpr uint16_t kDetections = 30;
+    constexpr uint32_t kMessageCounter = 1234;
+    std::vector<uint8_t> header = iso_header(0x08, kMessageCounter);
+    header[1] = 2;  // InterfaceVersionID 1.2.0
+    header.resize(BTS_RDI_HEADER_MSG_SIZE, 0);
+    header[34] = kDetections;
+    header[36] = 27;  // EntitiesPerChunk
+    header[38] = 2;   // ChunkCount
+    std::vector<std::vector<uint8_t>> chunks;
+    for (uint16_t k = 0; k < 2; ++k) {
+        const uint16_t first = static_cast<uint16_t>(k * 27);
+        const uint16_t count = k == 0 ? 27 : 3;
+        std::vector<uint8_t> c(BTS_RDI_CHUNK_HEADER_SIZE + count * BTS_RDI_DETECTION_SIZE, 0);
+        for (int i = 0; i < 4; ++i) c[i] = static_cast<uint8_t>(kMessageCounter >> (8 * i));
+        c[4] = static_cast<uint8_t>(first);
+        c[6] = static_cast<uint8_t>(count);
+        for (uint16_t i = 0; i < count; ++i) {
+            c[BTS_RDI_CHUNK_HEADER_SIZE + i * BTS_RDI_DETECTION_SIZE + 1] =
+                static_cast<uint8_t>(first + i);  // DetectionID
+        }
+        chunks.push_back(c);
+    }
+
+    std::mutex mu;
+    std::vector<AfiRdiFrame> rdi;
+    std::vector<AfiWirePayloadFrame> wire;
+    std::atomic<uint32_t> lost{0};
+    AfiSdk sdk;
+    sdk.RegRecvCallback([&](const AfiRdiFrame& f) {
+        std::lock_guard<std::mutex> lock(mu);
+        rdi.push_back(f);
+    });
+    sdk.RegWirePayloadCallback([&](const AfiWirePayloadFrame& f) {
+        std::lock_guard<std::mutex> lock(mu);
+        wire.push_back(f);
+    });
+    sdk.RegRecvCallback([&](uint32_t, uint32_t l) { lost.store(l); });
+    CHECK(sdk.Init(config) == kOk);
+    CHECK(sdk.Start() == kOk);
+
+    // Scan 5 complete; scan 6 loses chunk 1 and header B (closed by the timeout).
+    send_udp(config.rdi_port, make_rdi_v12_frame(0x8002, 5, header));
+    send_udp(config.rdi_port, make_rdi_v12_frame(0x8100, 5, chunks[0]));
+    send_udp(config.rdi_port, make_rdi_v12_frame(0x8101, 5, chunks[1]));
+    send_udp(config.rdi_port, make_rdi_v12_frame(0x8002, 5, header));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    send_udp(config.rdi_port, make_rdi_v12_frame(0x8002, 6, header));
+    send_udp(config.rdi_port, make_rdi_v12_frame(0x8100, 6, chunks[0]));
+
+    for (int i = 0; i < 100; ++i) {
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            if (rdi.size() >= 2) break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(sdk.GetInterfaceGeneration() == AfiInterfaceGeneration::kV1_2);
+    CHECK(sdk.Stop() == kOk);
+
+    std::lock_guard<std::mutex> lock(mu);
+    CHECK(rdi.size() == 2);
+    CHECK(rdi[0].e2e_counter == 5 && rdi[0].e2e_checked && rdi[0].e2e_valid);
+    CHECK(rdi[0].generation == AfiInterfaceGeneration::kV1_2);
+    CHECK(rdi[0].IsComplete() && rdi[0].chunk_count == 2);
+    CHECK(rdi[0].message.message_counter == kMessageCounter);
+    CHECK(rdi[0].message.num_detections == kDetections);
+    CHECK(rdi[0].message.detections[29].detection_id == 29);
+    CHECK(rdi[1].e2e_counter == 6 && !rdi[1].IsComplete());
+    CHECK(rdi[1].chunks_received == 1 && rdi[1].message.num_detections == 27);
+    CHECK(rdi[1].announced_detections == kDetections);
+    CHECK(rdi[1].frame_seq == rdi[0].frame_seq + 1);
+    CHECK(lost.load() == 0);
+
+    // Every message reaches the payload callback with its Event ID.
+    CHECK(wire.size() == 6);
+    const uint16_t events[] = {0x8002, 0x8100, 0x8101, 0x8002, 0x8002, 0x8100};
+    for (size_t i = 0; i < wire.size(); ++i) {
+        CHECK(wire[i].event_id == events[i]);
+        CHECK(wire[i].someip_interface_version == kSomeipInterfaceVersionRdi);
+        CHECK(wire[i].e2e_valid);
+        CHECK(wire[i].generation == AfiInterfaceGeneration::kV1_2);
+        CHECK(wire[i].message_counter == kMessageCounter);
+    }
+    CHECK(wire[1].payload.size() == kE2eHeaderSize + chunks[0].size());
+    PASS("v1_2_header_and_chunk_messages_form_one_scan");
+}
+
+TEST(rdi_chunk_event_is_rejected_under_interface_version_1) {
+    AfiSdkConfig config;
+    config.sensor_ip = "127.0.0.1";
+    config.enable_config_api = false;
+    config.enable_rdi = true;
+    config.enable_shi = false;
+    config.enable_spi = false;
+    config.rdi_transport = "udp";
+    config.rdi_port = test_port(61);
+
+    std::atomic<int> wire{0};
+    AfiSdk sdk;
+    sdk.RegWirePayloadCallback([&](const AfiWirePayloadFrame&) { wire.fetch_add(1); });
+    CHECK(sdk.Init(config) == kOk);
+    CHECK(sdk.Start() == kOk);
+    std::vector<uint8_t> frame = make_rdi_v12_frame(0x8100, 1,
+        std::vector<uint8_t>(BTS_RDI_CHUNK_HEADER_SIZE, 0));
+    frame[13] = kSomeipInterfaceVersion;  // a chunk Event exists only under 0x02
+    send_udp(config.rdi_port, frame);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(sdk.Stop() == kOk);
+    CHECK(wire.load() == 0);
+    PASS("rdi_chunk_event_is_rejected_under_interface_version_1");
+}
+
 TEST(legacy_v1_0_frames_are_delivered_as_valid) {
     AfiSdkConfig config;
     config.sensor_ip = "127.0.0.1";  // loopback senders
@@ -530,5 +696,64 @@ TEST(udp_streams_drop_other_sources) {
     PASS("udp_streams_drop_other_sources");
 }
 
+
+TEST(stop_returns_while_a_tcp_sensor_sends_nothing) {
+    // A sensor that keeps the TCP connection but halts its streams (for
+    // example in the programming access mode) must not block Stop().
+    PlatformSocketInit sockets;
+    const uint16_t port = test_port(63);
+    socket_t listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    CHECK(listener != kInvalidSocket);
+    int reuse = 1;
+    ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR,
+                 reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    CHECK(::listen(listener, 1) == 0);
+    std::atomic<bool> connected{false};
+    std::atomic<bool> release{false};
+    std::thread server([&] {
+        socket_t peer = ::accept(listener, nullptr, nullptr);
+        if (peer == kInvalidSocket) return;
+        connected.store(true);
+        // Without the fix Stop() waits for this close; 3 s turns that hang
+        // into a failed elapsed-time check instead of a stuck test.
+        for (int i = 0; i < 300 && !release.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        platform_close_socket(peer);
+    });
+
+    AfiSdkConfig config;
+    config.sensor_ip = "127.0.0.1";
+    config.enable_config_api = false;
+    config.enable_rdi = true;
+    config.enable_shi = false;
+    config.enable_spi = false;
+    config.stream_transport = "tcp";
+    config.rdi_port = port;
+    config.connect_timeout_ms = 1000;
+
+    AfiSdk sdk;
+    CHECK(sdk.Init(config) == kOk);
+    CHECK(sdk.Start() == kOk);
+    for (int i = 0; i < 200 && !connected.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(connected.load());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(sdk.Stop() == kOk);
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+    release.store(true);
+    server.join();
+    platform_close_socket(listener);
+    CHECK(elapsed < std::chrono::seconds(2));
+    PASS("stop_returns_while_a_tcp_sensor_sends_nothing");
+}
 
 TEST_MAIN("Wire Payload Callback Tests")

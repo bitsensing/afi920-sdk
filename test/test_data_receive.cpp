@@ -1,6 +1,6 @@
 /**
  * @file test_data_receive.cpp
- * @brief Integration test: RDI/SHII/SPI reception (requires a live sensor)
+ * @brief Integration test: data stream reception (requires a live sensor)
  *
  * Receives streams for N seconds through the parser-independent payload
  * callback and the typed callbacks, and reports per-stream E2E results.
@@ -29,13 +29,15 @@ struct WireStats {
     bool have_counter = false;
 };
 
-WireStats g_wire[3];
+// Indexed by AfiStreamKind.
+constexpr int kStreams = 3;
+const char* kNames[kStreams] = {"RDI", "SHII", "SPI"};
+
+WireStats g_wire[kStreams];
 std::atomic<uint32_t> g_rdi{0}, g_shi{0}, g_spi{0};
 std::atomic<uint32_t> g_lost{0};
+std::atomic<uint32_t> g_rdi_partial{0};  // v1.2.0 scans with missing chunks
 std::atomic<uint8_t> g_shi_input_status{0xFF};
-
-// Indexed by AfiStreamKind.
-const char* kNames[3] = {"RDI", "SHII", "SPI"};
 
 } // namespace
 
@@ -66,21 +68,29 @@ int main(int argc, char* argv[]) {
 
     afi::AfiSdk sdk;
     sdk.RegWirePayloadCallback([](const afi::AfiWirePayloadFrame& f) {
-        WireStats& w = g_wire[static_cast<int>(f.stream)];
+        const int index = static_cast<int>(f.stream);
+        if (index < 0 || index >= kStreams) return;
+        WireStats& w = g_wire[index];
         w.frames.fetch_add(1);
         if (f.e2e_valid) w.e2e_valid.fetch_add(1);
-        if (w.have_counter && f.e2e_counter - w.last_counter - 1 >= 0x7FFFFFFFu) {
-            w.counter_bad.fetch_add(1);
+        // The header and chunk messages of one v1.2.0 RDI scan share one
+        // counter; check RDI, SHII and SPI across send slots.
+        if (index <= 2 && !(w.have_counter && f.e2e_counter == w.last_counter)) {
+            if (w.have_counter && f.e2e_counter - w.last_counter - 1 >= 0x7FFFFFFFu) {
+                w.counter_bad.fetch_add(1);
+            }
+            w.last_counter = f.e2e_counter;
+            w.have_counter = true;
         }
-        w.last_counter = f.e2e_counter;
-        w.have_counter = true;
     });
     sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
         if (g_rdi.fetch_add(1) == 0) {
-            printf("[RDI] first frame: %d detections, counter=%u dq=%d\n",
+            printf("[RDI] first frame: %d detections, counter=%u dq=%d chunks=%u/%u\n",
                    f.message.num_detections, f.message.message_counter,
-                   static_cast<int>(f.message.data_qualifier));
+                   static_cast<int>(f.message.data_qualifier),
+                   f.chunks_received, f.chunk_count);
         }
+        if (!f.IsComplete()) g_rdi_partial.fetch_add(1);
     });
     sdk.RegRecvCallback([](const afi::AfiShiMessage& m) {
         if (g_shi.fetch_add(1) == 0) {
@@ -133,14 +143,14 @@ int main(int argc, char* argv[]) {
 
     printf("\nTyped frames: RDI=%u SHII=%u SPI=%u\n",
            g_rdi.load(), g_shi.load(), g_spi.load());
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kStreams; ++i) {
         const uint32_t n = g_wire[i].frames.load();
         printf("Wire %-7s frames=%u e2e_valid=%u (%.2f%%) counter_bad=%u\n",
                kNames[i], n, g_wire[i].e2e_valid.load(),
                n ? 100.0 * g_wire[i].e2e_valid.load() / n : 0.0,
                g_wire[i].counter_bad.load());
     }
-    printf("RDI slot loss=%u\n", g_lost.load());
+    printf("RDI slot loss=%u partial scans=%u\n", g_lost.load(), g_rdi_partial.load());
     if (send_csii) {
         printf("CSII sent=%d, SHII input status before=%u after=%u (0=Valid 2=Missing)\n",
                csii_sent, status_before, g_shi_input_status.load());

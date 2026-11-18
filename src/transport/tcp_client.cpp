@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "transport/tcp_client.h"
 #include "protocol/e2e.h"
+#include "protocol/interface_version.h"
 #include "util/endian_util.h"
 #include "util/logger.h"
 #include <cstring>
+#include <nlohmann/json.hpp>
 #ifdef _WIN32
 #include <mstcpip.h>
 #else
@@ -121,7 +123,19 @@ int TcpClient::ProbeLocked() {
         CloseLocked();
         return kTcpOk;
     }
-    generation_.store(AfiInterfaceGeneration::kV1_1);
+    // GetDeviceInfo carries if_version from interface v1.2.0 on.
+    AfiInterfaceGeneration generation = AfiInterfaceGeneration::kV1_1;
+    const nlohmann::json resp = nlohmann::json::parse(body.begin(), body.end(),
+                                                      nullptr, false);
+    if (resp.is_object() && resp.contains("data") && resp["data"].is_object()) {
+        const auto& data = resp["data"];
+        if (data.contains("if_version") && data["if_version"].is_string()) {
+            const AfiInterfaceGeneration g =
+                GenerationFromIfVersion(data["if_version"].get<std::string>());
+            if (g != AfiInterfaceGeneration::kUnknown) generation = g;
+        }
+    }
+    generation_.store(generation);
     return kTcpOk;
 }
 
@@ -176,7 +190,7 @@ int TcpClient::ExchangeLocked(uint16_t method_id,
     if (session_id_ == 0) session_id_ = 1;
 
     // Build SOME/IP header + E2E header + body into a single buffer.
-    // The radar reads the body from frame offset 36 (Config API Overview §1).
+    // The radar reads the body from frame offset 36 (Config API Overview §2.1).
     uint32_t message_id = (static_cast<uint32_t>(kServiceId) << 16) | method_id;
     uint32_t length = 8 + static_cast<uint32_t>(kE2eHeaderBytes + payload.size());
     uint32_t request_id = (static_cast<uint32_t>(kClientId) << 16) | session_id_;
@@ -270,7 +284,7 @@ int TcpClient::ExchangeLocked(uint16_t method_id,
     }
 
     // Verify and strip the response E2E header. A failed check is reported
-    // and the body is still handed to the caller (System Spec §7.5).
+    // and the body is still handed to the caller (Interface Overview §3.2.5).
     E2eHeader e2e;
     const E2eStatus st = e2e_validate(response_payload.data(),
                                       response_payload.size(), e2e, data_id);
