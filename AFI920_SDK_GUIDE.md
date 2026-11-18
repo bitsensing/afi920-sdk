@@ -957,6 +957,8 @@ The stream layouts are the same in both generations and the SDK passes every val
 | SHII input signal statuses | 1 entry | 4 entries |
 | E2E Counter | Per stream, from 1 on each TCP connection | Send slot shared by RDI, SHII and SPI |
 
+On interface v1.2.0 the RDI ambiguity domain is computed per frame (`radial_velocity_begin` −17.21 to −12.05 m/s, `radial_velocity_end` 12.05 to 17.21 m/s, ±17.21 m/s before the first computed frame). `relative_velocity_radial` is the resolved velocity and can lie outside that domain. `existence_probability` is 1 to 100: 90 to 100 real, 70 to 89 suspected ghost, 50 to 69 likely ghost, 1 to 49 ghost. 98, 97, 95 and 93 mark range, angle, range and angle, and velocity shape-estimation points.
+
 ---
 
 ## 14. Key Data Structures
@@ -1009,13 +1011,13 @@ Positions are spherical. Convert to Cartesian in your own code if needed.
 
 | C++ field | Python key (`parse_rdi_detection`) | Unit | Description |
 |-----------|------------------------------------|------|-------------|
-| `existence_probability` | `existence_probability` | % | 0 to 100 |
+| `existence_probability` | `existence_probability` | % | 0 to 100 (1 to 100 from interface v1.2.0) |
 | `detection_id` | `detection_id` | | `0xFFFF` if unused |
 | `object_id_reference` | `object_id_reference` | | Associated object ID (reserved) |
 | `timestamp_difference` | `timestamp_difference` | s | Offset to the message timestamp |
 | `radar_cross_section` | `rcs` | dBsm | Radar cross-section |
 | `signal_to_noise_ratio` | `snr` | dB | |
-| `ambiguity_grouping_id` | `ambiguity_grouping_id` | | `0xFFFF` if unused |
+| `ambiguity_grouping_id` | `ambiguity_grouping_id` | | Always 0 (not supported by the sensor) |
 | `position_radial_distance` | `radial_distance` | m | Range |
 | `position_azimuth` | `azimuth` | rad | |
 | `position_elevation` | `elevation` | rad | |

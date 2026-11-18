@@ -317,6 +317,8 @@ The stream layouts are the same in both generations. The SDK passes every value 
 | SHII input signal statuses | 1 entry | 4 entries |
 | E2E Counter | Per stream, from 1 on each TCP connection | Send slot shared by RDI, SHII and SPI |
 
+On interface v1.2.0 the RDI ambiguity domain is computed per frame (`radial_velocity_begin` −17.21 to −12.05 m/s, `radial_velocity_end` 12.05 to 17.21 m/s, ±17.21 m/s before the first computed frame). `relative_velocity_radial` is the resolved velocity and can lie outside that domain. `existence_probability` is 1 to 100: 90 to 100 real, 70 to 89 suspected ghost, 50 to 69 likely ghost, 1 to 49 ghost. 98, 97, 95 and 93 mark range, angle, range and angle, and velocity shape-estimation points.
+
 ---
 
 ## Configuration Workflow
@@ -534,7 +536,7 @@ Wire-format data is represented via ISO 23150 C structures under `third_party/af
 | `relative_velocity_radial` | `float` | Radial velocity (m/s) |
 | `radar_cross_section` | `float` | RCS (dBsm) |
 | `signal_to_noise_ratio` | `float` | SNR (dB) |
-| `existence_probability` | `uint8_t` | Existence probability (0-100%) |
+| `existence_probability` | `uint8_t` | Existence probability (%, 1 to 100 from interface v1.2.0) |
 | `object_id_reference` | `uint16_t` | Associated object ID (reserved) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | Measurement errors (range/azimuth/elevation/velocity) |
 

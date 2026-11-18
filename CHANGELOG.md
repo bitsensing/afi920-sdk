@@ -135,6 +135,12 @@ remain supported for data reception in this release only.
   port state, not the lock verdict (SHII SensorTimeSync reports lock);
   `grid_offset_ns` is the radiate and send grid minus system time, and stream
   timestamps do not carry it.
+- **RDI field values** — the docs follow interface v1.2.0: the ambiguity
+  domain is computed per frame (`radial_velocity_begin` −17.21 to −12.05 m/s,
+  `radial_velocity_end` 12.05 to 17.21 m/s) and `relative_velocity_radial`
+  can lie outside it; `existence_probability` is 1 to 100 with the real,
+  suspected ghost, likely ghost and ghost bands and the shape-estimation
+  markers 98, 97, 95 and 93; `ambiguity_grouping_id` is always 0.
 - **Firmware update** — Python `upload_component()` aborts a session that a
   refused `FirmwareUpdateStart` left in `error`; `FirmwareUpdateStatus` may
   report `"initializing"`.

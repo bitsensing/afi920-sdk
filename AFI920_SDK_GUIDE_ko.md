@@ -957,6 +957,8 @@ SDK가 세대를 판정하는 방식은 다음과 같다.
 | SHII 입력 신호 상태 | 1개 | 4개 |
 | E2E Counter | 스트림별, TCP 연결마다 1부터 증가 | RDI, SHII, SPI가 공유하는 송신 주기 |
 
+인터페이스 v1.2.0에서 RDI 모호성 구간은 프레임마다 산출한다(`radial_velocity_begin` −17.21~−12.05 m/s, `radial_velocity_end` 12.05~17.21 m/s, 첫 산출 프레임 전에는 ±17.21 m/s). `relative_velocity_radial`은 모호성을 해소한 값이므로 이 구간 밖의 값일 수 있다. `existence_probability`는 1~100이며, 90~100은 실물, 70~89는 고스트 의심, 50~69는 고스트 유력, 1~49는 고스트를 뜻한다. 98, 97, 95, 93은 각각 거리, 각도, 거리·각도, 속도 형상추정점을 표시한다.
+
 ---
 
 ## 14. 주요 데이터 구조
@@ -1009,13 +1011,13 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 
 | C++ 필드 | Python 키 (`parse_rdi_detection`) | 단위 | 설명 |
 |----------|-----------------------------------|------|------|
-| `existence_probability` | `existence_probability` | % | 0~100 |
+| `existence_probability` | `existence_probability` | % | 0~100(인터페이스 v1.2.0부터 1~100) |
 | `detection_id` | `detection_id` | | 미사용 시 `0xFFFF` |
 | `object_id_reference` | `object_id_reference` | | 연관 객체 ID(예약) |
 | `timestamp_difference` | `timestamp_difference` | s | 메시지 타임스탬프 대비 시간차 |
 | `radar_cross_section` | `rcs` | dBsm | 레이더 단면적 |
 | `signal_to_noise_ratio` | `snr` | dB | 신호 대 잡음비 |
-| `ambiguity_grouping_id` | `ambiguity_grouping_id` | | 미사용 시 `0xFFFF` |
+| `ambiguity_grouping_id` | `ambiguity_grouping_id` | | 항상 0(센서 미지원) |
 | `position_radial_distance` | `radial_distance` | m | 거리 |
 | `position_azimuth` | `azimuth` | rad | 방위각 |
 | `position_elevation` | `elevation` | rad | 고도각 |

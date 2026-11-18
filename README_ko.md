@@ -317,6 +317,8 @@ SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요�
 | SHII 입력 신호 상태 | 1개 | 4개 |
 | E2E Counter | 스트림별, TCP 연결마다 1부터 증가 | RDI, SHII, SPI가 공유하는 송신 주기 |
 
+인터페이스 v1.2.0에서 RDI 모호성 구간은 프레임마다 산출한다(`radial_velocity_begin` −17.21~−12.05 m/s, `radial_velocity_end` 12.05~17.21 m/s, 첫 산출 프레임 전에는 ±17.21 m/s). `relative_velocity_radial`은 모호성을 해소한 값이므로 이 구간 밖의 값일 수 있다. `existence_probability`는 1~100이며, 90~100은 실물, 70~89는 고스트 의심, 50~69는 고스트 유력, 1~49는 고스트를 뜻한다. 98, 97, 95, 93은 각각 거리, 각도, 거리·각도, 속도 형상추정점을 표시한다.
+
 ---
 
 ## Configuration Workflow
@@ -544,7 +546,7 @@ python test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>  
 | `relative_velocity_radial` | `float` | 시선 방향 속도 (m/s) |
 | `radar_cross_section` | `float` | RCS (dBsm) |
 | `signal_to_noise_ratio` | `float` | SNR (dB) |
-| `existence_probability` | `uint8_t` | 존재 확률 (0~100%) |
+| `existence_probability` | `uint8_t` | 존재 확률 (%, 인터페이스 v1.2.0부터 1~100) |
 | `object_id_reference` | `uint16_t` | 연계 Object ID (예약) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | 측정 오차 (거리/수평각/수직각/속도) |
 
