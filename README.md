@@ -9,7 +9,7 @@
 C++ and Python SDK for the bitsensing **AFI920 4D Imaging Radar**.  
 Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, the Config API with its access modes, and firmware update.
 
-> **Version 2.2.0**: tracks AFI920 interface v1.2.0 and receives data from interface v1.1.0 (firmware v3.1.1) and v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
+> **Version 2.2.0**: tracks AFI920 interface v1.2.0 (firmware v3.1.2) and receives data from interface v1.1.0 (firmware v3.1.1) and v1.0.x sensors (firmware 3.0.0 to 3.1.0). See [CHANGELOG.md](CHANGELOG.md).
 
 > **bitsensing**: [bitsensing.com](https://bitsensing.com)
 
@@ -289,9 +289,9 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 
 ## Firmware Compatibility
 
-The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0), v1.1.0 (firmware 3.1.1) and v1.2.0. The Config API and the firmware update are interface v1.1.0 and later.
+The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0), v1.1.0 (firmware 3.1.1) and v1.2.0 (firmware 3.1.2). The Config API and the firmware update are interface v1.1.0 and later.
 
-| Function | Interface v1.2.0 | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
+| Function | Interface v1.2.0 (FW 3.1.2) | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
 |----------|------------------|-----------------------------|--------------------------------------|
 | Discovery | Supported (`if_version`) | Supported | Supported |
 | RDI reception | Header/chunk messages, one `AfiRdiFrame` per scan | One message per scan | One message per scan |
@@ -540,7 +540,7 @@ Wire-format data is represented via ISO 23150 C structures under `third_party/af
 | `object_id_reference` | `uint16_t` | Associated object ID (reserved) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | Measurement errors (range/azimuth/elevation/velocity) |
 
-The protocol allows up to **8192 detections per frame** (36-byte header + 51 bytes per detection); firmware v3.1.1 sends at most 2048. UDP large frames are segmented with SOME/IP-TP and reassembled automatically; TCP carries one complete SOME/IP frame.
+The protocol allows up to **8192 detections per frame** (36-byte header + 51 bytes per detection); firmware v3.1.1 and v3.1.2 send at most 2048. UDP large frames are segmented with SOME/IP-TP and reassembled automatically; TCP carries one complete SOME/IP frame.
 
 > **Important:** A callback's frame reference is valid only during the callback. Copying the whole `AfiRdiFrame` is safe: the copy owns its vector and rebinds the C payload pointer. If you directly resize or replace the public storage vector, call `RebindStorage()` afterward.
 

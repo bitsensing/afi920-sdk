@@ -1,6 +1,6 @@
 # API Reference
 
-This reference describes SDK v2.2.0, which implements AFI920 interface v1.2.0 and receives data from interface v1.1.0 (sensor firmware v3.1.1) and v1.0.x sensors.
+This reference describes SDK v2.2.0, which implements AFI920 interface v1.2.0 (sensor firmware v3.1.2) and receives data from interface v1.1.0 (sensor firmware v3.1.1) and v1.0.x sensors.
 
 ## Protocol Stack
 
@@ -505,7 +505,7 @@ Call `RebindStorage()` after resizing or replacing `detections_storage` directly
 | `relative_velocity_radial` | `float` | Radial velocity (m/s) |
 | `relative_velocity_radial_error` | `float` | Radial velocity error (m/s) |
 
-An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 detections** (FW v3.1.1 sends at most 2048). The ambiguity domain covers radial velocity only (`radial_velocity_begin` / `radial_velocity_end`).
+An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 detections** (FW v3.1.1 and v3.1.2 send at most 2048). The ambiguity domain covers radial velocity only (`radial_velocity_begin` / `radial_velocity_end`).
 
 ### `AfiShiMessage` / `AfiSpiMessage` / `AfiStreamMeta`
 
@@ -543,7 +543,7 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 | `kUnknown` (0) | Not determined yet |
 | `kV1_0` (1) | Interface v1.0.x, firmware 3.0.0 to 3.1.0: data streams and CSII only |
 | `kV1_1` (2) | Interface v1.1.0, firmware 3.1.1 |
-| `kV1_2` (3) | Interface v1.2.x: `if_version` key, RDI header/chunk messages |
+| `kV1_2` (3) | Interface v1.2.x (firmware 3.1.2): `if_version` key, RDI header/chunk messages |
 
 ### `AfiRangeMode`
 
@@ -595,7 +595,7 @@ Vehicle dynamics sent by `SendVehicleInput()`. The SDK fills the interface heade
 | `steering_angle_rad` | `float` | Steering angle (rad) |
 | `gear_position` | `bts_csii_gear_position_t` | Gear position (default neutral) |
 
-FW v3.1.1 stores the received values; SOMC and the global timestamp do not change sensor behaviour.
+FW v3.1.1 and v3.1.2 store the received values; SOMC and the global timestamp do not change sensor behaviour.
 
 ### `AfiSensorInfo` (Discovery)
 
@@ -848,7 +848,7 @@ Profile values are `0=gPTP`, `1=1588v2-L2`, `2=1588v2-UDP`.
 | `fw_update_active` | `string` | Active firmware face (`"A"` / `"B"`) |
 | `fw_update_valid_a` | `bool` | Face A holds a verified image |
 | `fw_update_valid_b` | `bool` | Face B holds a verified image |
-| `fw_update_boot_count` | `uint32_t` | Stored boot count (not incremented by FW v3.1.1) |
+| `fw_update_boot_count` | `uint32_t` | Stored boot count (not incremented by FW v3.1.1 or v3.1.2) |
 | `boot_info_status` | `string` | `"ok"` / `"backup_used"` / `"default"` |
 
 ### Config Persistence Structs

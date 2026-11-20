@@ -4,7 +4,7 @@
 |------|----|
 | 대상 | AI 코딩 어시스턴트, LLM 기반 자동화, bitsensing AFI920 4D 이미징 레이더를 가장 짧은 경로로 코드에 연동하려는 엔지니어 |
 | SDK 버전 | 2.2.0 (C++, Python) |
-| 센서 인터페이스 | AFI920 인터페이스 v1.2.0과 v1.1.0(펌웨어 v3.1.1)이다. 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0)는 데이터 수신만 지원하며, 세부 사항은 [13절](#13-인터페이스-v10x-호환)에서 확인한다 |
+| 센서 인터페이스 | AFI920 인터페이스 v1.2.0(펌웨어 v3.1.2)과 v1.1.0(펌웨어 v3.1.1)이다. 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0)는 데이터 수신만 지원하며, 세부 사항은 [13절](#13-인터페이스-v10x-호환)에서 확인한다 |
 | 라이선스 | BSD-3-Clause |
 | 전체 API 레퍼런스 | [docs/api_reference.md](docs/api_reference.md) |
 
@@ -273,7 +273,7 @@ cfg.enable_spi = true;
 
 afi::AfiSdk sdk;
 
-// RDI: point cloud (FW v3.1.1 sends at most 2048 detections per frame; the protocol allows 8192)
+// RDI: point cloud (FW v3.1.1 and v3.1.2 send at most 2048 detections per frame; the protocol allows 8192)
 sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
     /* f.message.detections[0 .. f.message.num_detections-1], f.e2e_valid, f.generation */
 });
@@ -778,7 +778,7 @@ sdk.close()
 | 스레드 | 호출자 스레드에서 실행되며 내부에서 직렬화된다 |
 | 오류 | C++는 `Init()` 전에 `kNotInitialized`를, 소켓 생성·연결·송신 실패 시 `kConnectFailed`를 반환한다. Python은 `NOT_INITIALIZED`, `DISCONNECTED`를 반환한다 |
 | 접근 모드 | 모든 모드에서 수락된다 |
-| FW v3.1.1 | 수신 값을 저장한다. SOMC와 global timestamp는 센서 동작을 바꾸지 않는다 |
+| FW v3.1.1, v3.1.2 | 수신 값을 저장한다. SOMC와 global timestamp는 센서 동작을 바꾸지 않는다 |
 
 ```cpp
 // C++
@@ -923,11 +923,11 @@ for idx, ip in enumerate(["192.168.10.150", "192.168.10.151"]):
 
 ## 13. 인터페이스 v1.0.x 호환
 
-SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v1.2.0 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0 이후에서 동작한다.
+SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v1.2.0(펌웨어 3.1.2) 센서의 데이터를 수신한다. Config API와 펌웨어 업데이트는 인터페이스 v1.1.0 이후에서 동작한다.
 
 인터페이스 v1.2.0은 RDI 스캔 하나를 헤더 A, 묶음 메시지, 헤더 B로 나누어 송신한다(SOME/IP Interface Version 0x02, Event `0x8002`와 `0x8100`~`0x814B`, Event마다 별도 E2E Data ID). SDK는 E2E Counter를 기준으로 이 메시지를 스캔 하나의 `AfiRdiFrame`으로 조립한다(Interface Overview §3.2.3). 따라서 RDI 콜백은 모든 세대에서 같은 형식의 프레임을 받는다. 묶음이 빠진 스캔은 도착한 검출만으로 전달하며, `chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`가 그 상태를 표시한다. 헤더 메시지를 하나도 받지 못한 스캔은 폐기한다. payload 콜백은 모든 메시지를 `event_id`, `someip_interface_version`과 함께 받는다. Python 수신부는 `streams.RdiStreamDecoder`를 사용하며, 이 클래스는 스캔마다 `parse_rdi_frame`으로 해석하는 단일 메시지 형식 RDI payload를 반환한다.
 
-| 기능 | 인터페이스 v1.2.0 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
+| 기능 | 인터페이스 v1.2.0 (FW 3.1.2) | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
 |------|-------------------|------------------------------|-------------------------------------|
 | Discovery | 지원(`if_version`) | 지원 | 지원 |
 | RDI 수신 | 헤더·묶음 메시지, 스캔당 `AfiRdiFrame` 1개 | 스캔당 메시지 1개 | 스캔당 메시지 1개 |
@@ -1009,7 +1009,7 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | `announced_detections` | `uint16_t` | 헤더가 알린 detection 수이며, chunk가 누락되면 `message.num_detections`가 이 값보다 작다 |
 | `IsComplete()` | `bool` | `chunks_received == chunk_count`이고 `message.num_detections == announced_detections`인지 여부 |
 
-`message`는 ISO23150 Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1은 최대 2048개를 송신한다.
+`message`는 ISO23150 Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1과 v3.1.2는 최대 2048개를 송신한다.
 
 ### Detection 필드 (`bts_rdi_detection_t`, 51바이트)
 

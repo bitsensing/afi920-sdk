@@ -4,7 +4,7 @@
 |------|-------|
 | Audience | AI coding assistants, LLM-driven automation, and engineers who need the shortest path from a bitsensing AFI920 4D imaging radar to working code |
 | SDK version | 2.2.0 (C++ and Python) |
-| Sensor interface | AFI920 interface v1.2.0 and v1.1.0 (firmware v3.1.1). Interface v1.0.x (firmware 3.0.0 to 3.1.0) is supported for data only, see [section 13](#13-interface-v10x-compatibility) |
+| Sensor interface | AFI920 interface v1.2.0 (firmware v3.1.2) and v1.1.0 (firmware v3.1.1). Interface v1.0.x (firmware 3.0.0 to 3.1.0) is supported for data only, see [section 13](#13-interface-v10x-compatibility) |
 | License | BSD-3-Clause |
 | Full API reference | [docs/api_reference.md](docs/api_reference.md) |
 
@@ -273,7 +273,7 @@ cfg.enable_spi = true;
 
 afi::AfiSdk sdk;
 
-// RDI: point cloud (FW v3.1.1 sends at most 2048 detections per frame; the protocol allows 8192)
+// RDI: point cloud (FW v3.1.1 and v3.1.2 send at most 2048 detections per frame; the protocol allows 8192)
 sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
     /* f.message.detections[0 .. f.message.num_detections-1], f.e2e_valid, f.generation */
 });
@@ -778,7 +778,7 @@ sdk.close()
 | Threading | Runs on the caller's thread, serialized internally |
 | Errors | C++: `kNotInitialized` before `Init()`, `kConnectFailed` when the socket cannot be created or connected or the send fails. Python: `NOT_INITIALIZED`, `DISCONNECTED` |
 | Access mode | Accepted in every mode |
-| FW v3.1.1 | Stores the received values. SOMC and the global timestamp do not change sensor behaviour |
+| FW v3.1.1, v3.1.2 | Stores the received values. SOMC and the global timestamp do not change sensor behaviour |
 
 ```cpp
 // C++
@@ -923,11 +923,11 @@ for idx, ip in enumerate(["192.168.10.150", "192.168.10.151"]):
 
 ## 13. Interface v1.0.x Compatibility
 
-The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0), v1.1.0 (firmware 3.1.1) and v1.2.0. The Config API and the firmware update are interface v1.1.0 and later.
+The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0), v1.1.0 (firmware 3.1.1) and v1.2.0 (firmware 3.1.2). The Config API and the firmware update are interface v1.1.0 and later.
 
 Interface v1.2.0 sends one RDI scan as header A, chunk messages and header B (SOME/IP Interface Version 0x02; Events `0x8002` and `0x8100` to `0x814B`, one E2E Data ID per Event). The SDK assembles them into one `AfiRdiFrame` per scan by the E2E Counter (Interface Overview §3.2.3), so an RDI callback receives the same frame from every generation. A scan with missing chunks is delivered with the detections that arrived: `chunk_count`, `chunks_received`, `announced_detections` and `IsComplete()` report it, and a scan without any header message is dropped. The payload callback receives every message with its `event_id` and `someip_interface_version`. Python receivers use `streams.RdiStreamDecoder`, which returns one single-message RDI payload per scan for `parse_rdi_frame`.
 
-| Function | Interface v1.2.0 | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
+| Function | Interface v1.2.0 (FW 3.1.2) | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
 |----------|------------------|-----------------------------|--------------------------------------|
 | Discovery | Supported (`if_version`) | Supported | Supported |
 | RDI reception | Header/chunk messages, one `AfiRdiFrame` per scan | One message per scan | One message per scan |
@@ -1009,7 +1009,7 @@ The Python `AfiSdkConfig` dataclass has `sensor_ip`, `config_port`, `csii_port`,
 | `announced_detections` | `uint16_t` | Detections the header announces; `message.num_detections` is lower when chunks are missing |
 | `IsComplete()` | `bool` | `chunks_received == chunk_count` and `message.num_detections == announced_detections` |
 
-`message` holds the ISO23150 Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 sends at most 2048.
+`message` holds the ISO23150 Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 and v3.1.2 send at most 2048.
 
 ### Detection Fields (`bts_rdi_detection_t`, 51 bytes)
 
