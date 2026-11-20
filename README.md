@@ -21,7 +21,7 @@ Covers sensor discovery, RDI/SHII/SPI data reception, CSII vehicle input, the Co
 - This README covers quick-start workflows for sensor discovery, data reception, sensor configuration, and firmware update.
 - Product manuals, interface specifications, and detailed installation/operation guides are provided separately.
 - Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0) are supported for data only. Interface v1.2.0 sensors are supported, RDI header/chunk messages included. See [Firmware Compatibility](#firmware-compatibility).
-- The protocol interface headers under `third_party/afi920_interface/src/c` are vendored from interface v1.1.0.
+- The protocol interface headers under `third_party/afi920_interface/src/c` are vendored from interface v1.2.0.
 
 ---
 
@@ -132,7 +132,7 @@ SW Version: 3.1.1
 
 - **Discovery**: Find AFI920 sensors on the network via UDP broadcast. Responses are collected for one timeout window and deduplicated by source IP and serial number.
 - **Data Streaming**: Receive RDI (Point Cloud), SHII (Health), and SPI (Performance) in real time over TCP or UDP (C++). The Python SDK provides the matching parsing helpers in `afi_sdk.streams`.
-- **Vehicle Input (CSII)**: Send vehicle dynamics (speed, yaw rate, gear, ...) to the sensor over UDP (interface v1.1.0) or TCP (v1.0.x).
+- **Vehicle Input (CSII)**: Send vehicle dynamics (speed, yaw rate, gear, ...) to the sensor over UDP (interface v1.1.0 and later) or TCP (v1.0.x).
 - **E2E Protection**: 20-byte E2E header (IEEE 802.3 CRC-32 over the body) on every data stream message and every Config API request and response. The verdict is delivered with each frame.
 - **Config API**: Read and write sensor configuration over TCP via SOME/IP + JSON, including the access mode API (`GetMode`, `SetMode`, `EnterMode`).
 - **Firmware Update**: Config API firmware update calls in C++ and Python, plus the complete update sequence in the Python module `afi_sdk.firmware`.
@@ -275,13 +275,13 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 | Port | Protocol | Direction | Event ID | Description |
 |------|----------|-----------|----------|-------------|
 | 30500 | TCP | Host ↔ Sensor | (none) | Config API (SOME/IP + JSON/raw chunk, Method IDs `0x0010`–`0x00E1`) |
-| 30501 | UDP (v1.1.0), TCP (v1.0.x) | Host → Sensor | `0x8001` | CSII (Vehicle Input) |
+| 30501 | UDP (v1.1.0 and later), TCP (v1.0.x) | Host → Sensor | `0x8001` | CSII (Vehicle Input) |
 | 30509 | TCP/UDP | Sensor → Host | `0x8002` | RDI (Radar Detections / Point Cloud) |
 | 30510 | TCP/UDP | Sensor → Host | `0x8003` | SHII (Sensor Health Information) |
 | 30511 | TCP/UDP | Sensor → Host | `0x8004` | SPI (Sensor Performance Information) |
 | 30520 | UDP | Host ↔ Sensor | (none) | Discovery (Broadcast) |
 
-> **Note:** The default data stream transport is TCP: the host connects to the sensor at the stream port. Over UDP the host binds the stream port and accepts only datagrams whose source is `sensor_ip`. Set `stream_transport` globally, or use `rdi_transport`, `shi_transport`, and `spi_transport` as per-stream overrides; the value must match the protocol the sensor is configured to send (`GetNetworkConfig`). CSII uses UDP on interface v1.1.0 and TCP on v1.0.x. The SDK picks the CSII transport from the sensor's interface generation, and `csii_transport` overrides it.
+> **Note:** The default data stream transport is TCP: the host connects to the sensor at the stream port. Over UDP the host binds the stream port and accepts only datagrams whose source is `sensor_ip`. Set `stream_transport` globally, or use `rdi_transport`, `shi_transport`, and `spi_transport` as per-stream overrides; the value must match the protocol the sensor is configured to send (`GetNetworkConfig`). CSII uses UDP on interface v1.1.0 and later, TCP on v1.0.x. The SDK picks the CSII transport from the sensor's interface generation, and `csii_transport` overrides it.
 
 > **E2E Protection:** Every RDI/SHII/SPI/CSII message and every Config API request and response carries a 20-byte E2E header (CRC high 0, CRC-32, Length, Counter, Data ID; big-endian). The CRC covers the body only, and a zero CRC field never passes. The interface leaves the disposition of a failed check to the host (Interface Overview §3.2.5). By default the SDK logs a warning and delivers the frame with its verdict in `e2e_counter`, `e2e_checked`, and `e2e_valid` (`AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`). `validate_e2e` turns the data stream check on or off, and `e2e_strict = true` drops failing frames instead. A Config API response that fails the check is still returned, and `GetLastSensorResult().e2e_ok` holds its verdict. A sensor on interface v1.0.x puts a CRC-64/XZ over Length, Counter, Data ID and the body in the first 8 bytes. The SDK accepts it on receive and reports the sender in `generation`.
 
@@ -304,12 +304,12 @@ Interface v1.2.0 sends one RDI scan as header A, chunk messages and header B (SO
 
 The SDK learns the generation from a read-only GetDeviceInfo request at the start of each Config API connection; the `if_version` key in its answer marks v1.2.0 and later. With the Config API off, it learns it from the stream frames that pass the E2E check. `GetInterfaceGeneration()` (C++) and `interface_generation` (Python) report it. Discovery reports it per sensor in `AfiSensorInfo::generation` and the Python `_interface_generation` key. On a v1.0.x sensor the SDK closes the Config API connection after that request and returns every later Config API call without sending it. A v1.0.x sensor runs some v1.1.0 requests, such as Restart and ResetAllSettings, even though it cannot parse them.
 
-The stream layouts are the same in both generations. The SDK passes every value through unchanged, and the fields below mean different things on v1.0.x. The ISO23150 Header interface version of the payload (`1.0.0` or `1.1.0`) tells the generations apart.
+The stream layouts of v1.0.x and v1.1.0 are the same. The SDK passes every value through unchanged, and the fields below mean different things on v1.0.x. The ISO23150 Header interface version of the payload (`1.0.0`, `1.1.0` or `1.2.0`) tells the generations apart.
 
 | Field | Interface v1.0.x | Interface v1.1.0 |
 |-------|------------------|------------------|
 | RDI `existence_probability` | Marker 100, 60 or 40 | Probability × 100; augmented detections 95 or 90 |
-| RDI DataQualifier | 0, 5 (injection or test mode), 6 | 0, 1, 6 |
+| RDI DataQualifier | 0, 5 (test mode), 6 | 0, 1, 6 |
 | RDI MessageCounter | Send counter | Scan index; repeats on a DataQualifier 6 resend |
 | RDI RecognisedDetectionsCapability | 4096 (FW 3.0.x) or 8192 | 2048 |
 | RDI radial velocity domain | ±50 m/s (FW 3.0.0) | From −111.11 m/s |
@@ -468,7 +468,7 @@ Build and run:
 ```bash
 cmake .. -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build . --config Release
-ctest --output-on-failure
+ctest -C Release --output-on-failure
 ```
 
 CTest runs the C++ unit tests (including `test_config_transport`) and, when a Python 3 interpreter is found, `test_python_streams` and `test_python_sdk`. `test_python_config_transport` and `test_python_firmware` are registered when `pytest` is installed:
@@ -479,13 +479,13 @@ pip install pytest
 
 ### Integration Tests
 
-Run with a live sensor:
+Run with a live sensor from the build directory. With a Visual Studio generator the C++ test binaries are in `test/Release/`.
 
 ```bash
 ./test/test_discovery
 ./test/test_config_api 192.168.10.150
 ./test/test_data_receive 192.168.10.150 60
-python test/test_live_conformance.py 192.168.10.150 --duration 30
+python ../test/test_live_conformance.py 192.168.10.150 --duration 30
 ```
 
 - `test_config_api` sends GET requests only. With `--write` it enters the diagnostic access mode and writes the same values back; every write is stored in NVM, and the radar stays in the diagnostic mode until it reboots.
@@ -494,8 +494,8 @@ python test/test_live_conformance.py 192.168.10.150 --duration 30
 The following tests are destructive and refuse to run without their confirmation flag. Use them only on a sensor set aside for testing:
 
 ```bash
-python test/test_live_write.py 192.168.10.150 --yes-mutate
-python test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>     [--bootloader --bl-hash <hash>] --yes-flash
+python ../test/test_live_write.py 192.168.10.150 --yes-mutate
+python ../test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>     [--bootloader --bl-hash <hash>] --yes-flash
 ./test/test_firmware_live 192.168.10.150 DIR/bootloader.bin <hash> --yes-flash
 ```
 
@@ -565,7 +565,7 @@ AfiSdk
 - Callbacks fire on internal receiver threads; keep handlers non-blocking or hand off data to a dedicated worker thread.
 - The RDI loss callback counts lost send slots from gaps in the E2E Counter of frames whose E2E check passed.
 - TCP data streams reconnect after a connection drop, with a backoff from 1 s up to 30 s.
-- `SendVehicleInput()` runs on the caller's thread and creates the CSII socket on first use: UDP for interface v1.1.0, TCP for v1.0.x.
+- `SendVehicleInput()` runs on the caller's thread and creates the CSII socket on first use: UDP for interface v1.1.0 and later, TCP for v1.0.x.
 - Each Config API connection opens with a read-only GetDeviceInfo request that decides the interface generation; on v1.0.x the connection closes and Config API calls return `kNotSupported` without sending.
 - The Config API client sends one request at a time and verifies that each response echoes the request (message, client, and session ID, protocol version `0x01`, RESPONSE type). A timeout, a mismatched response, or a lost connection drops the socket, and the next call reconnects to the same endpoint. `request_timeout_ms` bounds each request, and a request body above 16,384 bytes returns `kInvalidParam` without being sent.
 - A failed Config API connect during `Init()` does not fail `Init()`; the endpoint is kept and the next Config API call connects. `Init()` can be called again after `Stop()`.

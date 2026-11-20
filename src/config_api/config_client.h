@@ -24,13 +24,13 @@ public:
     /// Radar outcome of the last call made through this client.
     AfiSensorResult LastResult() const;
 
-    // ─── Access Mode (0x00Ex) ───
+    // --- Access Mode (0x00Ex) ---
     int GetMode(AfiModeStatus& out);
     int SetMode(AfiAccessMode mode, AfiModeStatus* out = nullptr);
     /// Walk Normal -> Diagnostic -> Programming up to `target` (see AfiSdk::EnterMode).
     int EnterMode(AfiAccessMode target);
 
-    // ─── Device Info & Status (0x001x) ───
+    // --- Device Info & Status (0x001x) ---
     int GetDeviceInfo(AfiDeviceInfo& out);
     int GetSensorStatus(AfiSensorStatus& out);
     int GetDiagnosticInfo(AfiDiagnosticInfo& out);
@@ -40,30 +40,30 @@ public:
     int GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count,
                     AfiFaultLogPage& out);
 
-    // ─── Network (0x002x) ───
+    // --- Network (0x002x) ---
     int GetNetworkConfig(AfiNetworkConfig& out);
-    /// Full update — includes the radar's own network fields, so the
+    /// Full update - includes the radar's own network fields, so the
     /// sensor reports restart_required=true. Restart via Restart().
     int SetNetworkConfig(const AfiNetworkConfig& config, bool* restart_required = nullptr);
     /// Partial update of a single stream destination (NVM; applies after Restart)
     int SetStreamDestination(AfiStreamKind kind, const AfiStreamDestination& dst);
 
-    // ─── Range Mode (0x003x) ───
+    // --- Range Mode (0x003x) ---
     int GetRangeMode(AfiRangeMode& out);
     /// Stored in NVM; takes effect after Restart (restart_required is always true).
     int SetRangeMode(AfiRangeMode mode, bool* restart_required = nullptr);
 
-    // ─── Detection (0x004x) ───
+    // --- Detection (0x004x) ---
     int GetDetectionThreshold(AfiDetectionThreshold& out);
     int SetDetectionThreshold(const AfiDetectionThreshold& threshold);
     int GetDetectionFilters(AfiDetectionFilters& out);
     int SetDetectionFilters(const AfiDetectionFilters& filters);
 
-    // ─── Time Sync (0x005x) ───
+    // --- Time Sync (0x005x) ---
     int GetPtpConfig(AfiPtpConfig& out);
     int SetPtpConfig(uint8_t profile, bool* restart_required = nullptr);
 
-    // ─── Mounting (0x007x) ───
+    // --- Mounting (0x007x) ---
     int GetMountingPosition(AfiMountingPosition& out);
     int SetMountingPosition(const AfiMountingPosition& pos);
     int GetRotation(AfiRotation& out);
@@ -71,7 +71,7 @@ public:
     int GetSensorPosition(AfiSensorPosition& out);
     int SetSensorPosition(const AfiSensorPosition& pos);
 
-    // ─── Firmware Update (0x008x) ───
+    // --- Firmware Update (0x008x) ---
     int FirmwareUpdateStart(const AfiOtaStartRequest& req, AfiOtaStartResponse& out);
     int FirmwareDataChunk(const uint8_t* data, size_t len,
                           AfiOtaChunkResult* out = nullptr);
@@ -82,7 +82,7 @@ public:
     int FirmwareUpdateReboot();
     int GetBootInfo(AfiBootInfo& out);
 
-    // ─── Config Persistence (0x009x) ───
+    // --- Config Persistence (0x009x) ---
     int GetConfigStatus(AfiConfigStatus& out);
     int ResetConfigDefaults(const std::vector<std::string>& keys,
                             AfiResetConfigDefaultsResult* out = nullptr);

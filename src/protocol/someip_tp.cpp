@@ -106,7 +106,7 @@ bool SomeipTpReassembler::IsFullyCovered() const {
 }
 
 void SomeipTpReassembler::Reset() {
-    // Don't deallocate — keep buffer for reuse
+    // Don't deallocate - keep buffer for reuse
     covered_ranges_.clear();
     expected_size_ = 0;
     total_size_ = 0;

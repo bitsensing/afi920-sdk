@@ -12,7 +12,7 @@
 
 namespace afi {
 
-// ─── SOME/IP Constants ───
+// --- SOME/IP Constants ---
 
 static constexpr uint16_t kSomeipServiceId        = 0x6000;
 static constexpr size_t   kSomeipHeaderSize        = 16;
@@ -29,20 +29,20 @@ static constexpr uint8_t  kSomeipMsgTypeError      = 0x81;
 static constexpr uint8_t  kSomeipMsgTypeTpFlag     = 0x20;
 static constexpr uint8_t  kSomeipReturnOk          = 0x00;
 
-// ─── Event IDs ───
+// --- Event IDs ---
 
-static constexpr uint16_t kEventCsii    = 0x8001;  // Host → Radar (UDP on v1.1.0, TCP on v1.0.x)
+static constexpr uint16_t kEventCsii    = 0x8001;  // Host -> Radar (UDP on v1.1.0, TCP on v1.0.x)
 static constexpr uint16_t kEventRdi     = 0x8002;  // v1.2.0: header A and header B
 static constexpr uint16_t kEventRdiChunkBase = 0x8100;  // v1.2.0: chunk k = base + k
 static constexpr uint16_t kRdiMaxChunks      = 76;      // k = 0..75 (0x8100~0x814B)
 static constexpr uint16_t kEventShii    = 0x8003;
 static constexpr uint16_t kEventSpi     = 0x8004;
 
-// ─── E2E header, 20B CRC-32 (data streams and Config API) ───
+// --- E2E header, 20B CRC-32 (data streams and Config API) ---
 
 static constexpr size_t   kE2eHeaderSize = 20;
 
-// ─── Method IDs (Config API, interface v1.1.0 registry) ───
+// --- Method IDs (Config API, interface v1.1.0 registry) ---
 
 enum class MethodId : uint16_t {
     // Category 1: Device Info & Status (0x0010~0x0017)
@@ -103,14 +103,14 @@ enum class MethodId : uint16_t {
     kSetMode               = 0x00E1,
 };
 
-// ─── Transport Mode ───
+// --- Transport Mode ---
 
 enum class SomeipTransport : uint8_t {
     kUdp = 0,  // TP auto-applied for payload > 1392B
     kTcp = 1,  // Always single SOME/IP frame (no TP)
 };
 
-// ─── Parsed SOME/IP Header ───
+// --- Parsed SOME/IP Header ---
 
 struct SomeipHeader {
     uint16_t service_id;
@@ -151,7 +151,7 @@ inline uint32_t someip_payload_size(const SomeipHeader& hdr, bool has_tp) {
     return (hdr.length > overhead) ? (hdr.length - overhead) : 0;
 }
 
-// ─── TP Header ───
+// --- TP Header ---
 
 struct SomeipTpHeader {
     uint32_t offset_bytes;

@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
     });
 
     if (sdk.Init(config) != afi::kOk) {
-        printf("Init failed — sensor unreachable at %s\n", config.sensor_ip.c_str());
+        printf("Init failed - sensor unreachable at %s\n", config.sensor_ip.c_str());
         return 1;
     }
     if (sdk.Start() != afi::kOk) {

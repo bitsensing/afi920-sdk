@@ -139,7 +139,7 @@ void UdpReceiver::Close() {
     }
 }
 
-// ─── UdpSender ───
+// --- UdpSender ---
 
 UdpSender::~UdpSender() {
     Disconnect();

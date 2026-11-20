@@ -27,7 +27,7 @@ enum AfiError {
     kInvalidState   = -14,  ///< Radar INVALID_STATE (0x0E): chained step out of order
 };
 
-/// Radar return codes (Interface Overview §4), sent in the SOME/IP header and the
+/// Radar return codes (Interface Overview section 4), sent in the SOME/IP header and the
 /// JSON body of every Config API response.
 enum AfiReturnCode {
     kRcSuccess               = 0x00,

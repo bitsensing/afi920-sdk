@@ -52,6 +52,7 @@ from afi_sdk.someip import (
     INTERFACE_GEN_UNKNOWN,
     INTERFACE_GEN_V1_0,
     INTERFACE_GEN_V1_1,
+    INTERFACE_GEN_V1_2,
     discovery_generation,
 )
 from afi_sdk import streams
@@ -80,5 +81,6 @@ __all__ = [
     "INTERFACE_GEN_UNKNOWN",
     "INTERFACE_GEN_V1_0",
     "INTERFACE_GEN_V1_1",
+    "INTERFACE_GEN_V1_2",
     "discovery_generation",
 ]

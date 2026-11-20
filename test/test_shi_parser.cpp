@@ -113,7 +113,7 @@ TEST(parse_ultra_dual_range_operation_mode) {
 }
 
 TEST(parse_minimal_message) {
-    // All counts zero — minimum 32B
+    // All counts zero - minimum 32B
     auto buf = make_shi(0, 0, 0);
     CHECK(buf.size() == 32u);
 

@@ -92,7 +92,7 @@
     }
 #endif
 
-// ─── Thread Naming ───
+// --- Thread Naming ---
 
 #ifdef _WIN32
     #include <windows.h>

@@ -30,7 +30,7 @@ enum TcpResult {
 
 class TcpClient {
 public:
-    /// Request body limit (Config API Overview §1). The radar closes the
+    /// Request body limit (Config API Overview section 1). The radar closes the
     /// connection without a reply when Length < 28 or > 28 + this.
     static constexpr size_t kMaxRequestBody = 16384;
 
@@ -84,7 +84,7 @@ public:
      * (Data ID 0x6000 << 16 | method_id, CRC-32 over the body), sends the
      * frame, receives the response, and strips the response E2E header.
      * A failed response E2E check is logged as a warning and the body is
-     * still returned (Interface Overview §3.2.5); LastResponseE2eOk() holds the verdict.
+     * still returned (Interface Overview section 3.2.5); LastResponseE2eOk() holds the verdict.
      *
      * Any transport or framing failure closes the connection, because a late
      * response left in the socket would be read as the next request's answer.

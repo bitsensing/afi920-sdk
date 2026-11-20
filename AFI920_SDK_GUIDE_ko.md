@@ -4,7 +4,7 @@
 |------|----|
 | 대상 | AI 코딩 어시스턴트, LLM 기반 자동화, bitsensing AFI920 4D 이미징 레이더를 가장 짧은 경로로 코드에 연동하려는 엔지니어 |
 | SDK 버전 | 2.2.0 (C++, Python) |
-| 센서 인터페이스 | AFI920 인터페이스 v1.1.0(펌웨어 v3.1.1)이다. 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0)는 데이터 수신만 지원하며, 세부 사항은 [13절](#13-인터페이스-v10x-호환)에서 확인한다 |
+| 센서 인터페이스 | AFI920 인터페이스 v1.2.0과 v1.1.0(펌웨어 v3.1.1)이다. 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0)는 데이터 수신만 지원하며, 세부 사항은 [13절](#13-인터페이스-v10x-호환)에서 확인한다 |
 | 라이선스 | BSD-3-Clause |
 | 전체 API 레퍼런스 | [docs/api_reference.md](docs/api_reference.md) |
 
@@ -41,7 +41,7 @@ AFI920 SDK는 호스트 컴퓨터와 하나 이상의 bitsensing AFI920 레이�
 | 레이더 → 호스트 | RDI (TCP/UDP 30509, Event `0x8002`) | 포인트 클라우드 detection(거리, 방위각, 고도각, 반경 속도, RCS, SNR, 오차) |
 | 레이더 → 호스트 | SHII (TCP/UDP 30510, Event `0x8003`) | 센서 상태 정보 |
 | 레이더 → 호스트 | SPI (TCP/UDP 30511, Event `0x8004`) | 센서 성능과 장착 자세 |
-| 호스트 → 레이더 | CSII (30501, Event `0x8001`, v1.1.0은 UDP, v1.0.x는 TCP) | 차량 동역학 |
+| 호스트 → 레이더 | CSII (30501, Event `0x8001`, v1.1.0 이후는 UDP, v1.0.x는 TCP) | 차량 동역학 |
 | 호스트 ↔ 레이더 | Config API (TCP 30500, SOME/IP + JSON) | 상태, 설정, 접근 모드, 펌웨어 업데이트 |
 | 호스트 ↔ 레이더 | Discovery (UDP 브로드캐스트 30520) | LAN 내 센서 탐색 |
 
@@ -149,7 +149,7 @@ cmake --build build --config Release
 | CMake 옵션 | 기본값 | 설명 |
 |------------|--------|------|
 | `BUILD_EXAMPLES` | `ON` | `examples/cpp` 빌드 |
-| `BUILD_TESTS` | `OFF` | `test/` 빌드(빌드 디렉터리에서 `ctest --output-on-failure`로 실행) |
+| `BUILD_TESTS` | `OFF` | `test/` 빌드(빌드 디렉터리에서 `ctest -C Release --output-on-failure`로 실행하며, `-C`는 Visual Studio 같은 다중 구성 생성기의 구성을 지정한다) |
 
 **자체 CMakeLists.txt에서 링크하는 방법**
 
@@ -218,9 +218,8 @@ Python `AfiSdk` 클래스는 Config API, CSII, Discovery를 담당하며 스트�
 
 ```python
 import socket, struct
-from afi_sdk.someip import SOMEIP_HEADER_SIZE, DEFAULT_RDI_PORT
-from afi_sdk.streams import (E2E_DATA_ID_RDI, strip_e2e,
-                             parse_rdi_frame, parse_rdi_detection)
+from afi_sdk.someip import DEFAULT_RDI_PORT
+from afi_sdk.streams import RdiStreamDecoder, parse_rdi_frame, parse_rdi_detection
 
 def recv_exact(sock, n):
     buf = b""
@@ -232,6 +231,7 @@ def recv_exact(sock, n):
     return buf
 
 sock = socket.create_connection(("192.168.10.150", DEFAULT_RDI_PORT))   # TCP RDI stream
+decoder = RdiStreamDecoder()                      # v1.2.0 header/chunk scans and single-message scans
 
 while True:
     hdr = recv_exact(sock, 8)                        # SOME/IP Message ID (4) + Length (4)
@@ -239,19 +239,20 @@ while True:
         break
     length = struct.unpack(">I", hdr[4:8])[0]
     data = hdr + recv_exact(sock, length)            # one complete SOME/IP message
-    e2e, iso = strip_e2e(data[SOMEIP_HEADER_SIZE:], expected_data_id=E2E_DATA_ID_RDI)
-    if e2e is None or not e2e["ok"]:
-        continue                                     # failed checks are logged; the body is kept
-    frame = parse_rdi_frame(iso)                     # 36 B header
-    if not frame:
-        continue
-    print(f"detections={frame['num_detections']}  counter={frame['message_counter']}  "
-          f"dq={frame['data_qualifier']}")
-    if frame["num_detections"] > 0:
-        d = parse_rdi_detection(iso, frame["det_start"], 0)          # 51 B per detection
-        print(f"  r={d['radial_distance']:.2f} m  az={d['azimuth']:.3f} rad  "
-              f"el={d['elevation']:.3f} rad  v={d['radial_velocity']:.2f} m/s  "
-              f"rcs={d['rcs']:.1f} dBsm")
+    for scan in decoder.feed(data):                  # one dict per scan, every interface generation
+        if not scan["e2e_valid"]:
+            continue                                 # failed checks are logged
+        iso = scan["payload"]
+        frame = parse_rdi_frame(iso)                 # 36 B header
+        if not frame:
+            continue
+        print(f"detections={frame['num_detections']}  counter={frame['message_counter']}  "
+              f"dq={frame['data_qualifier']}")
+        if frame["num_detections"] > 0:
+            d = parse_rdi_detection(iso, frame["det_start"], 0)          # 51 B per detection
+            print(f"  r={d['radial_distance']:.2f} m  az={d['azimuth']:.3f} rad  "
+                  f"el={d['elevation']:.3f} rad  v={d['radial_velocity']:.2f} m/s  "
+                  f"rcs={d['rcs']:.1f} dBsm")
 ```
 
 DataQualifier `0`은 새 scan 데이터, `6`은 직전 scan의 재송신(MessageCounter 반복), `1`은 사용하지 않아야 하는 내용을 뜻한다.
@@ -335,7 +336,7 @@ Python SDK에는 스트리밍 callback이 없다. RDI(30509), SHII(30510), SPI(3
 
 ## 7. 접근 모드와 설정 저장
 
-인터페이스 v1.1.0은 접근 모드로 Config API의 사용 범위를 제한한다. 모든 설정 SET은 진단(Diagnostic) 모드를, 펌웨어 업데이트 연쇄는 프로그래밍(Programming) 모드를 요구한다. 모드 진입은 Normal, Diagnostic, Programming 순서의 단방향이며, Normal 복귀는 재부팅 또는 레이더 자체의 통신 스택 복구로만 일어난다.
+인터페이스 v1.1.0 이후는 접근 모드로 Config API의 사용 범위를 제한한다. 모든 설정 SET은 진단(Diagnostic) 모드를, 펌웨어 업데이트 연쇄는 프로그래밍(Programming) 모드를 요구한다. 모드 진입은 Normal, Diagnostic, Programming 순서의 단방향이며, Normal 복귀는 재부팅 또는 레이더 자체의 통신 스택 복구로만 일어난다.
 
 | 모드 | 값 | 개방 범위 | 데이터 스트림 |
 |------|----|-----------|---------------|
@@ -583,7 +584,7 @@ sdk.set_detection_filters(filter_ground_reflection=True, filter_multibounce_2x=T
 
 ## 9. 펌웨어 업데이트
 
-펌웨어 업데이트 연쇄는 프로그래밍 접근 모드에서 수행하며, 이 모드는 재부팅 전까지 RDI, SHII, SPI 송출을 정지한다. 대상 레이더는 인터페이스 v1.1.0이어야 한다.
+펌웨어 업데이트 연쇄는 프로그래밍 접근 모드에서 수행하며, 이 모드는 재부팅 전까지 RDI, SHII, SPI 송출을 정지한다. 대상 레이더는 인터페이스 v1.1.0 이후여야 한다.
 
 | `update_type` | 컴포넌트 | 기록 위치 |
 |---------------|----------|-----------|
@@ -773,7 +774,7 @@ sdk.close()
 | 항목 | 동작 |
 |------|------|
 | 선행 조건 | C++는 `Init()` 이후 호출하며 `Start()`는 필요하지 않다. Python은 `init()` 이후 호출한다 |
-| 전송 방식 | 인터페이스 세대에 따라 v1.1.0은 UDP datagram 1개, v1.0.x는 TCP 연결을 사용한다. 세대를 모르는 동안에는 UDP를 사용하며, `csii_transport = "udp"` / `"tcp"`로 강제한다 |
+| 전송 방식 | 인터페이스 세대에 따라 v1.1.0 이후는 UDP datagram 1개, v1.0.x는 TCP 연결을 사용한다. 세대를 모르는 동안에는 UDP를 사용하며, `csii_transport = "udp"` / `"tcp"`로 강제한다 |
 | 스레드 | 호출자 스레드에서 실행되며 내부에서 직렬화된다 |
 | 오류 | C++는 `Init()` 전에 `kNotInitialized`를, 소켓 생성·연결·송신 실패 시 `kConnectFailed`를 반환한다. Python은 `NOT_INITIALIZED`, `DISCONNECTED`를 반환한다 |
 | 접근 모드 | 모든 모드에서 수락된다 |
@@ -825,7 +826,7 @@ Discovery는 UDP 30520으로 요청을 한 번 브로드캐스트하고, timeout
 auto sensors = afi::AfiSdk::Discover(3000, 30520, "192.168.10.100");
 for (const auto& s : sensors) {
     printf("%s  %s  sw=%s  gen=%d\n", s.serial_number.c_str(), s.ip.c_str(),
-           s.software_version.c_str(), static_cast<int>(s.generation));   // 1 = v1.0.x, 2 = v1.1.0
+           s.software_version.c_str(), static_cast<int>(s.generation));   // 1 = v1.0.x, 2 = v1.1.0, 3 = v1.2.x
 }
 ```
 
@@ -853,7 +854,7 @@ for s in AfiSdk.discover(timeout_s=3.0, bind_ip="192.168.10.100"):
 | `position_code`, `offset_x/y/z`, `yaw_deg`, `pitch_deg`, `roll_deg` | 장착 값 |
 | `radar_active`, `scan_index`, `uptime_seconds` | 동작 상태, 현재 MessageCounter, uptime(초) |
 | `ptp_state`, `ptp_offset_ns` | PTP 상태 |
-| `generation` | 응답에 `driver_hash`가 있으면 `kV1_0`, `m72_*` 키가 있으면 `kV1_1` |
+| `generation` | 응답에 `if_version` 키가 있으면 그 값으로 판정한다(인터페이스 v1.2.0 이후, `kV1_2`). 키가 없으면 `driver_hash`가 있을 때 `kV1_0`, `m72_*` 키가 있을 때 `kV1_1` |
 
 Python dict는 레이더 IP를 `ip_address`에, uptime을 `scan_status.uptime_seconds`에 담는다.
 
@@ -926,14 +927,15 @@ SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v
 
 인터페이스 v1.2.0은 RDI 스캔 하나를 헤더 A, 묶음 메시지, 헤더 B로 나누어 송신한다(SOME/IP Interface Version 0x02, Event `0x8002`와 `0x8100`~`0x814B`, Event마다 별도 E2E Data ID). SDK는 E2E Counter를 기준으로 이 메시지를 스캔 하나의 `AfiRdiFrame`으로 조립한다(Interface Overview §3.2.3). 따라서 RDI 콜백은 모든 세대에서 같은 형식의 프레임을 받는다. 묶음이 빠진 스캔은 도착한 검출만으로 전달하며, `chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`가 그 상태를 표시한다. 헤더 메시지를 하나도 받지 못한 스캔은 폐기한다. payload 콜백은 모든 메시지를 `event_id`, `someip_interface_version`과 함께 받는다. Python 수신부는 `streams.RdiStreamDecoder`를 사용하며, 이 클래스는 스캔마다 `parse_rdi_frame`으로 해석하는 단일 메시지 형식 RDI payload를 반환한다.
 
-| 기능 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
-|------|------------------------------|-------------------------------------|
-| Discovery | 지원 | 지원 |
-| RDI, SHII, SPI 수신 | 지원 | 지원 |
-| E2E CRC | 본문 대상 CRC-32(IEEE 802.3), CRC 상위 워드 0 | Length, Counter, Data ID, 본문 대상 CRC-64/XZ(0~7바이트), 수신 시 허용 |
-| CSII | 30501 포트로 UDP datagram 1개 | 30501 포트로 TCP 연결 |
-| Config API | 지원 | `kNotSupported` / `NOT_SUPPORTED`(요청 미송신) |
-| 펌웨어 업데이트 | 지원 | `kNotSupported` / `NOT_SUPPORTED`(요청 미송신) |
+| 기능 | 인터페이스 v1.2.0 | 인터페이스 v1.1.0 (FW 3.1.1) | 인터페이스 v1.0.x (FW 3.0.0~3.1.0) |
+|------|-------------------|------------------------------|-------------------------------------|
+| Discovery | 지원(`if_version`) | 지원 | 지원 |
+| RDI 수신 | 헤더·묶음 메시지, 스캔당 `AfiRdiFrame` 1개 | 스캔당 메시지 1개 | 스캔당 메시지 1개 |
+| SHII, SPI 수신 | 지원 | 지원 | 지원 |
+| E2E CRC | 본문 대상 CRC-32(IEEE 802.3), CRC 상위 워드 0 | 본문 대상 CRC-32(IEEE 802.3), CRC 상위 워드 0 | Length, Counter, Data ID, 본문 대상 CRC-64/XZ(0~7바이트), 수신 시 허용 |
+| CSII | 30501 포트로 UDP datagram 1개 | 30501 포트로 UDP datagram 1개 | 30501 포트로 TCP 연결 |
+| Config API | 지원 | 지원 | `kNotSupported` / `NOT_SUPPORTED`(요청 미송신) |
+| 펌웨어 업데이트 | 지원 | 지원 | `kNotSupported` / `NOT_SUPPORTED`(요청 미송신) |
 
 SDK가 세대를 판정하는 방식은 다음과 같다.
 
@@ -941,10 +943,10 @@ SDK가 세대를 판정하는 방식은 다음과 같다.
 - Config API를 끈 구성에서는 E2E 검증을 통과한 마지막 스트림 프레임으로 세대를 판정한다.
 - `GetInterfaceGeneration()`(C++)은 `kUnknown`(0), `kV1_0`(1), `kV1_1`(2), `kV1_2`(3)을, `interface_generation`(Python)은 `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`, `INTERFACE_GEN_V1_2`를 보고한다.
 - 인터페이스 v1.2.0은 Discovery와 GetDeviceInfo에 `if_version` 키를 추가한다. SDK는 이 키를 먼저 읽는다. E2E 헤더만으로는 v1.1.0과 v1.2.0을 구분하지 못하므로, 스트림 프레임은 RDI 프레이밍과 ISO23150 Header 인터페이스 버전으로 v1.2.0을 표시한다.
-- 프레임 단위 세대는 `AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`의 `generation`과 Python `strip_e2e()`의 `e2e["generation"]`에 담긴다. 센서 단위 세대는 `AfiSensorInfo::generation`과 Python Discovery 키 `_interface_generation`(`discovery_generation(info)`)에 담긴다.
+- 프레임 단위 세대는 `AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`의 `generation`과 Python `strip_e2e()`의 `e2e["generation"]`에 담긴다. `strip_e2e()`는 E2E 헤더만으로 판정하므로 `INTERFACE_GEN_V1_0` 또는 `INTERFACE_GEN_V1_1`을 반환하며, 인터페이스 v1.2.0 RDI는 `RdiStreamDecoder` 스캔의 `INTERFACE_GEN_V1_2`로 판정한다. 센서 단위 세대는 `AfiSensorInfo::generation`과 Python Discovery 키 `_interface_generation`(`discovery_generation(info)`)에 담긴다.
 - Config API를 끈 구성에서 첫 스트림 프레임을 받기 전에는 세대를 알 수 없으므로 CSII는 UDP를 사용한다. 첫 호출부터 v1.0.x 센서에 전달하려면 `csii_transport = "tcp"`를 지정한다.
 
-스트림 layout은 두 세대에서 같으며, SDK는 모든 값을 변환하지 않고 전달한다. 아래 필드는 v1.0.x에서 의미가 다르며, 두 세대는 ISO23150 Header의 인터페이스 버전(`1.0.0` 또는 `1.1.0`)으로 구분한다.
+스트림 layout은 v1.0.x와 v1.1.0에서 같으며, SDK는 모든 값을 변환하지 않고 전달한다. 아래 필드는 v1.0.x에서 의미가 다르며, 세대는 ISO23150 Header의 인터페이스 버전(`1.0.0`, `1.1.0` 또는 `1.2.0`)으로 구분한다.
 
 | 필드 | 인터페이스 v1.0.x | 인터페이스 v1.1.0 |
 |------|-------------------|-------------------|
@@ -975,7 +977,7 @@ SDK가 세대를 판정하는 방식은 다음과 같다.
 | `csii_port` | `30501` | CSII 목적지 포트 |
 | `stream_transport` | `"tcp"` | 기본 스트림 전송 방식, `"tcp"` 또는 `"udp"` |
 | `rdi_transport`, `shi_transport`, `spi_transport` | 빈 값 | 스트림별 덮어쓰기 값이며, 빈 값이면 `stream_transport`를 사용한다 |
-| `csii_transport` | 빈 값 | 빈 값이면 세대에 따라 선택한다(v1.1.0은 UDP, v1.0.x는 TCP, 미판정 시 UDP). `"udp"` 또는 `"tcp"`로 강제한다 |
+| `csii_transport` | 빈 값 | 빈 값이면 세대에 따라 선택한다(v1.1.0 이후는 UDP, v1.0.x는 TCP, 미판정 시 UDP). `"udp"` 또는 `"tcp"`로 강제한다 |
 | `enable_rdi` | `true` | RDI 수신 |
 | `enable_shi` | `false` | SHII 수신 |
 | `enable_spi` | `false` | SPI 수신 |
@@ -1001,7 +1003,11 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | `e2e_counter` | `uint32_t` | E2E Counter(송신 주기) |
 | `e2e_checked` | `bool` | `validate_e2e` 활성 여부 |
 | `e2e_valid` | `bool` | Length, Data ID, CRC 검증 통과 여부 |
-| `generation` | `AfiInterfaceGeneration` | E2E 헤더로 판정한 송신 측 세대 |
+| `generation` | `AfiInterfaceGeneration` | E2E 헤더, RDI 프레이밍, ISO23150 Header 인터페이스 버전으로 판정한 송신 측 세대 |
+| `chunk_count` | `uint16_t` | 인터페이스 v1.2.0 스캔에서 헤더가 알린 chunk 메시지 수이며, 단일 메시지 스캔에서는 `0` |
+| `chunks_received` | `uint16_t` | 수신한 chunk 메시지 수 |
+| `announced_detections` | `uint16_t` | 헤더가 알린 detection 수이며, chunk가 누락되면 `message.num_detections`가 이 값보다 작다 |
+| `IsComplete()` | `bool` | `chunks_received == chunk_count`이고 `message.num_detections == announced_detections`인지 여부 |
 
 `message`는 ISO23150 Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1은 최대 2048개를 송신한다.
 
@@ -1012,7 +1018,7 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | C++ 필드 | Python 키 (`parse_rdi_detection`) | 단위 | 설명 |
 |----------|-----------------------------------|------|------|
 | `existence_probability` | `existence_probability` | % | 0~100(인터페이스 v1.2.0부터 1~100) |
-| `detection_id` | `detection_id` | | 미사용 시 `0xFFFF` |
+| `detection_id` | `detection_id` | | 인터페이스 v1.2.0에서는 스캔 내 0 기반 순번이며, 이전 버전에서는 미사용 시 `0xFFFF` |
 | `object_id_reference` | `object_id_reference` | | 연관 객체 ID(예약) |
 | `timestamp_difference` | `timestamp_difference` | s | 메시지 타임스탬프 대비 시간차 |
 | `radar_cross_section` | `rcs` | dBsm | 레이더 단면적 |
@@ -1039,7 +1045,7 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | `sensor_pose.origin_point_x/y/z` | 장착 위치(m) |
 | `sensor_pose.orientation_yaw/pitch/roll` | 장착 방향(rad) |
 | `sensor_pose.orientation_error_yaw/pitch` | 방향 오차(rad) |
-| `num_fov_segments`, `fov_segments[]` | 방위각과 고도각 범위, `blockage_status`(`BTS_SPI_BS_NONE`, `_PARTIAL_BLOCKAGE`, `_FULL_BLOCKAGE`, `_UNKNOWN`) |
+| `num_fov_segments`, `fov_segments[]` | 방위각과 고도각 범위, `blockage_status`(`BTS_SPI_BS_NONE`, `_PARTIAL_BLOCKAGE`, `_FULL_BLOCKAGE`) |
 | `num_recognisable_object_types`, `recognisable_object_types[]` | 객체 분류와 감지 거리 |
 | `num_reference_target_types`, `reference_target_types[]` | 기준 타겟의 RCS, 감지 거리, SNR |
 
@@ -1063,7 +1069,7 @@ Config API 회전값(`AfiRotation`, `get_rotation()`)의 단위는 도(degree)�
 | `AfiModeStatus` | `access_mode`(`AfiAccessMode`), `access_mode_name`(`"normal"` / `"diagnostic"` / `"programming"`), `elapsed_ms`, `streams_halted` |
 | `AfiSensorResult` | `return_code`(응답이 없으면 `-1`), `return_name`(예: `"SESSION_REQUIRED"`), `error_message`(펌웨어 업데이트 메서드), `e2e_ok` |
 | `AfiInterfaceGeneration` | `kUnknown`(0), `kV1_0`(1), `kV1_1`(2), `kV1_2`(3) |
-| `AfiDeviceInfo` | `serial_number`, `mac_address`, `vlan_id`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash` |
+| `AfiDeviceInfo` | `serial_number`, `mac_address`, `vlan_id`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash`, `if_version`(인터페이스 v1.2.0 이전에는 빈 값) |
 | `AfiSensorStatus` | `operation_state`, `operation_state_code`, `temperature_mcu`, `temperature_rf`, `voltage`, `uptime_sec` |
 | `AfiNetworkConfig` | `ip_address`, `subnet_mask`, `gateway`, `api_port`, `vlan_id`, `detection`, `health`, `performance`(`AfiStreamDestination`의 `ip`, `port`, `protocol`) |
 | `AfiFaultLogPage` | `ring`(`AfiFaultLogRing::kFault` / `kSample`), `slots`, `head`, `boot_count`, `slot`, `records`(슬롯 128B 원문) |
@@ -1115,7 +1121,7 @@ C++ 코드는 `afi_error.h`의 `afi::AfiError` enum이다. Python 상수는 같�
 | 포트 | 프로토콜 | 방향 | Event ID | E2E Data ID | 용도 |
 |------|----------|------|----------|-------------|------|
 | 30500 | TCP | ↔ | | `0x6000 << 16 \| Method ID` | Config API(SOME/IP + JSON, 펌웨어 조각은 raw binary), Method ID `0x0010`~`0x00E1` |
-| 30501 | UDP (v1.1.0), TCP (v1.0.x) | → | `0x8001` | `0x60008001` | CSII 차량 입력 |
+| 30501 | UDP (v1.1.0 이후), TCP (v1.0.x) | → | `0x8001` | `0x60008001` | CSII 차량 입력 |
 | 30509 | TCP/UDP | ← | `0x8002` | `0x60008002` | RDI 포인트 클라우드 |
 | 30510 | TCP/UDP | ← | `0x8003` | `0x60008003` | SHII 상태 정보 |
 | 30511 | TCP/UDP | ← | `0x8004` | `0x60008004` | SPI 성능 정보 |
@@ -1139,7 +1145,7 @@ TCP / UDP
 
 | E2E 오프셋 | 크기 | 필드 | 설명 |
 |------------|------|------|------|
-| 0 | 4 | CRC high | 인터페이스 v1.1.0에서 `0x00000000` |
+| 0 | 4 | CRC high | 인터페이스 v1.1.0 이후에서 `0x00000000` |
 | 4 | 4 | CRC | 본문만 대상으로 하는 IEEE 802.3 CRC-32(KAT `0xCBF43926`)이며, CRC가 0이면 통과로 판정하지 않는다 |
 | 8 | 4 | Length | 20바이트 헤더를 제외한 본문 길이 |
 | 12 | 4 | Counter | 데이터 스트림은 송신 주기, Config API는 시퀀스 |

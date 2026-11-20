@@ -13,7 +13,7 @@
 namespace afi {
 namespace detail {
 
-// ─── Big-endian unpack (for SOME/IP header) ───
+// --- Big-endian unpack (for SOME/IP header) ---
 
 inline uint16_t unpack_be16(const uint8_t* p) {
     return static_cast<uint16_t>((p[0] << 8) | p[1]);
@@ -26,7 +26,7 @@ inline uint32_t unpack_be32(const uint8_t* p) {
            (static_cast<uint32_t>(p[3]));
 }
 
-// ─── Little-endian unpack (for ISO 23150 payload) ───
+// --- Little-endian unpack (for ISO 23150 payload) ---
 
 inline uint16_t unpack_le16(const uint8_t* p) {
     return static_cast<uint16_t>(p[0] | (p[1] << 8));
@@ -57,7 +57,7 @@ inline float unpack_le_f32(const uint8_t* p) {
     return f;
 }
 
-// ─── Big-endian pack (for SOME/IP header serialization) ───
+// --- Big-endian pack (for SOME/IP header serialization) ---
 
 inline void pack_be16(uint8_t* p, uint16_t v) {
     p[0] = static_cast<uint8_t>((v >> 8) & 0xFF);

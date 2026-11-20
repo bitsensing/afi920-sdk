@@ -3,7 +3,7 @@
  * @brief Config API transport behaviour against a scripted loopback radar
  *
  * Pins what the client does when an answer is wrong, late, or refused
- * (Config API Overview §2.1, Interface Overview §4): the response must echo
+ * (Config API Overview section 2.1, Interface Overview section 4): the response must echo
  * Message/Client/Session ID with version 0x01; any mismatch, timeout, or
  * lost connection drops the socket so a late answer is never read as the
  * next one, and the next call reconnects. Radar return codes map to
@@ -508,7 +508,7 @@ TEST(v110_fields_parse) {
 }
 
 TEST(device_info_vlan_and_fault_log_page) {
-    // GetFaultLog record 0 is the Device & Status §01.7 example; record 1 is erased.
+    // GetFaultLog record 0 is the Device & Status section 01.7 example; record 1 is erased.
     static const std::string kRec0 =
         "464c0101ad142249010000000100000006000000000000000100020d00000000"
         "3932353165343462000000000000000070302003c409c409c409c4090410400b"

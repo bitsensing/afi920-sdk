@@ -69,20 +69,20 @@ typedef enum {
 typedef struct {
     /* --- Common Interface Header (24B, N=1) --- */
     bts_interface_version_t interface_version;          /* 3B */
-    uint8_t  interface_id;                              /* 1B  — 0x0E IID_CommonSensorInput */
-    uint8_t  num_valid_serving_sensors;                 /* 1B  — fixed 1 */
+    uint8_t  interface_id;                              /* 1B  - 0x0E IID_CommonSensorInput */
+    uint8_t  num_valid_serving_sensors;                 /* 1B  - fixed 1 */
     uint8_t  sensor_id;                                 /* 1B */
-    uint64_t timestamp_measurement;                     /* 8B  — PTP nanoseconds */
+    uint64_t timestamp_measurement;                     /* 8B  - PTP nanoseconds */
     uint32_t message_counter;                           /* 4B */
-    uint32_t interface_cycle_time;                      /* 4B  — ns */
-    uint8_t  interface_cycle_time_variation;            /* 1B  — % */
+    uint32_t interface_cycle_time;                      /* 4B  - ns */
+    uint8_t  interface_cycle_time_variation;            /* 1B  - % */
     bts_data_qualifier_t data_qualifier;                /* 1B */
 
     /* --- Sensor Operation Command (1B) --- */
     bts_csii_somc_t somc;                               /* 1B */
 
     /* --- Environmental Info: Time (8B) --- */
-    double   global_timestamp_utc;                      /* 8B  — UTC seconds */
+    double   global_timestamp_utc;                      /* 8B  - UTC seconds */
 
     /* --- Vehicle State (46B) --- */
     bts_csii_vehicle_coord_system_t vehicle_coord_system; /* 1B */
@@ -121,7 +121,7 @@ void bts_csii_init(bts_csii_message_t* msg);
 size_t bts_csii_serialized_size(const bts_csii_message_t* msg);
 
 /**
- * @brief Serialize CSII message to buffer (host side — publisher)
+ * @brief Serialize CSII message to buffer (host side - publisher)
  *
  * @param msg         Source message
  * @param buffer      Output buffer
@@ -133,7 +133,7 @@ int bts_csii_serialize(const bts_csii_message_t* msg,
                        size_t buffer_size);
 
 /**
- * @brief Deserialize CSII message from buffer (radar side — subscriber)
+ * @brief Deserialize CSII message from buffer (radar side - subscriber)
  *
  * Validates:
  *  - buffer size == 79B exactly

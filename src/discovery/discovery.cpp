@@ -85,7 +85,7 @@ std::vector<AfiSensorInfo> Discovery::Scan(int timeout_ms, uint16_t port,
 
     AFI_LOG_INFO("Discovery: broadcast sent to port %d", port);
 
-    // Collect responses for one window (Discovery §Publisher Usage). Each
+    // Collect responses for one window (Discovery section Publisher Usage). Each
     // radar answers twice (unicast + limited broadcast); the pair is deduped
     // by (source IP, serial number).
     std::set<std::string> seen;

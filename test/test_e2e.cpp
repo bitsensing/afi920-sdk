@@ -214,7 +214,7 @@ TEST(data_id_mismatch_rejected) {
 }
 
 TEST(zero_crc_passes_when_allowed) {
-    // Exception to Interface Overview §3.2.5: with
+    // Exception to Interface Overview section 3.2.5: with
     // allow_zero_crc a zero CRC field is received on the Data ID and Length
     // checks alone.
     uint8_t frame[20 + 4] = {};

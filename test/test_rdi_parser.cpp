@@ -109,7 +109,7 @@ TEST(parse_detections) {
 }
 
 TEST(data_qualifier_1_and_6_are_delivered) {
-    // Interface Overview §3.3.5: the radar sends DQ 0, 1, 6. The parser passes the
+    // Interface Overview section 3.3.5: the radar sends DQ 0, 1, 6. The parser passes the
     // value through; the consumer decides how to use DQ 1 and DQ 6 frames.
     for (uint8_t dq : {uint8_t{1}, uint8_t{6}}) {
         auto buf = make_rdi(1);
