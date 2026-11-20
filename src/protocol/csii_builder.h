@@ -1,6 +1,6 @@
 /**
  * @file csii_builder.h
- * @brief CSII (Common Sensor Input) frame builder — Host → Radar
+ * @brief CSII (Common Sensor Input) frame builder - Host -> Radar
  *
  * Builds the complete 115-byte wire frame:
  *   SOME/IP header (16B, BE) + E2E header (20B, BE, CRC-32 over the body)

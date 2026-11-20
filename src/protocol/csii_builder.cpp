@@ -30,7 +30,7 @@ int csii_build_frame(const AfiVehicleInput& input,
                      uint8_t* out) {
     if (!out) return -1;
 
-    // ─── ISO 23150 CSII payload (79B, little-endian) ───
+    // --- ISO 23150 CSII payload (79B, little-endian) ---
     uint8_t* p = out + kIsoOffset;
 
     // Common Interface Header (24B)
@@ -67,11 +67,11 @@ int csii_build_frame(const AfiVehicleInput& input,
     pack_le_f32(p + 74, input.steering_angle_rad);
     p[78] = static_cast<uint8_t>(input.gear_position);
 
-    // ─── E2E header (20B, big-endian), CRC-32 over the ISO body ───
+    // --- E2E header (20B, big-endian), CRC-32 over the ISO body ---
     e2e_write_header(out + kE2eOffset, BTS_E2E_DATA_ID_CSII, counter,
                      out + kIsoOffset, BTS_CSII_SIZE);
 
-    // ─── SOME/IP header (16B, big-endian) ───
+    // --- SOME/IP header (16B, big-endian) ---
     // Length covers request-id..payload: 8 + E2E(20) + ISO(79)
     uint32_t message_id = (static_cast<uint32_t>(kSomeipServiceId) << 16) | kEventCsii;
     uint32_t length = 8 + BTS_E2E_HEADER_SIZE + BTS_CSII_SIZE;

@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
 
     printf("Receiving RDI data... (Ctrl+C to stop)\n\n");
 
-    // Main loop — just wait
+    // Main loop - just wait
     auto start = std::chrono::steady_clock::now();
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

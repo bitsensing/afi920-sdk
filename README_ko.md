@@ -21,7 +21,7 @@ bitsensing **AFI920 4D Imaging Radar**용 C++ 및 Python SDK이다.
 - 센서 탐색, 데이터 수신, 센서 설정, 펌웨어 업데이트의 빠른 시작 절차는 이 README에서 확인한다.
 - 제품 매뉴얼, 인터페이스 명세, 설치 및 운영 상세 가이드는 별도 제공 문서에서 확인한다.
 - 인터페이스 v1.0.x 센서(펌웨어 3.0.0~3.1.0)는 데이터만 지원한다. 인터페이스 v1.2.0 센서는 RDI 헤더·묶음 메시지를 포함하여 지원한다. 세부 범위는 [Firmware Compatibility](#firmware-compatibility)에서 확인한다.
-- `third_party/afi920_interface/src/c`의 프로토콜 인터페이스 헤더는 인터페이스 v1.1.0을 vendoring한 사본이다.
+- `third_party/afi920_interface/src/c`의 프로토콜 인터페이스 헤더는 인터페이스 v1.2.0을 vendoring한 사본이다.
 
 ---
 
@@ -132,7 +132,7 @@ SW Version: 3.1.1
 
 - **Discovery**는 UDP 브로드캐스트로 네트워크상의 AFI920 센서를 탐색한다. 응답은 timeout 구간 1회 동안 수집하며, 송신 IP와 시리얼 번호 기준으로 중복을 제거한다.
 - **Data Streaming**은 RDI(Point Cloud), SHII(Health), SPI(Performance)를 TCP 또는 UDP로 실시간 수신한다(C++). Python SDK는 대응하는 파싱 함수를 `afi_sdk.streams`에서 제공한다.
-- **Vehicle Input (CSII)**은 차량 동역학 정보(속도, 요레이트, 기어 등)를 센서에 송신한다. 인터페이스 v1.1.0은 UDP, v1.0.x는 TCP를 사용한다.
+- **Vehicle Input (CSII)**은 차량 동역학 정보(속도, 요레이트, 기어 등)를 센서에 송신한다. 인터페이스 v1.1.0 이후는 UDP, v1.0.x는 TCP를 사용한다.
 - **E2E Protection**은 모든 데이터 스트림 메시지와 모든 Config API 요청·응답의 20바이트 E2E 헤더(본문 대상 IEEE 802.3 CRC-32)를 검증한다. 판정 결과는 각 프레임과 함께 전달한다.
 - **Config API**는 TCP 기반 SOME/IP + JSON으로 센서 설정을 조회하고 변경하며, 접근 모드 API(`GetMode`, `SetMode`, `EnterMode`)를 포함한다.
 - **Firmware Update**는 C++와 Python의 Config API 펌웨어 업데이트 호출과 Python 모듈 `afi_sdk.firmware`의 전체 업데이트 절차로 구성한다.
@@ -275,13 +275,13 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 | 포트 | 프로토콜 | 방향 | Event ID | 설명 |
 |------|----------|------|----------|------|
 | 30500 | TCP | 호스트 ↔ 센서 | (없음) | Config API (SOME/IP + JSON/raw chunk, Method ID `0x0010`~`0x00E1`) |
-| 30501 | UDP (v1.1.0), TCP (v1.0.x) | 호스트 → 센서 | `0x8001` | CSII (Vehicle Input) |
+| 30501 | UDP (v1.1.0 이후), TCP (v1.0.x) | 호스트 → 센서 | `0x8001` | CSII (Vehicle Input) |
 | 30509 | TCP/UDP | 센서 → 호스트 | `0x8002` | RDI (Radar Detections / Point Cloud) |
 | 30510 | TCP/UDP | 센서 → 호스트 | `0x8003` | SHII (Sensor Health Information) |
 | 30511 | TCP/UDP | 센서 → 호스트 | `0x8004` | SPI (Sensor Performance Information) |
 | 30520 | UDP | 호스트 ↔ 센서 | (없음) | Discovery (Broadcast) |
 
-> **참고** 기본 데이터 스트림 전송 방식은 TCP이며, 호스트가 센서의 스트림 포트로 접속한다. UDP에서는 호스트가 스트림 포트를 bind하고, 송신 주소가 `sensor_ip`인 datagram만 수신한다. `stream_transport`로 전체 기본값을 지정하고, `rdi_transport`, `shi_transport`, `spi_transport`로 스트림별 값을 덮어쓴다. 이 값은 센서에 설정된 송신 프로토콜(`GetNetworkConfig`)과 일치해야 한다. CSII는 인터페이스 v1.1.0에서 UDP, v1.0.x에서 TCP를 사용한다. SDK는 센서의 인터페이스 세대로 CSII 전송 방식을 정하며, `csii_transport`로 이 선택을 덮어쓴다.
+> **참고** 기본 데이터 스트림 전송 방식은 TCP이며, 호스트가 센서의 스트림 포트로 접속한다. UDP에서는 호스트가 스트림 포트를 bind하고, 송신 주소가 `sensor_ip`인 datagram만 수신한다. `stream_transport`로 전체 기본값을 지정하고, `rdi_transport`, `shi_transport`, `spi_transport`로 스트림별 값을 덮어쓴다. 이 값은 센서에 설정된 송신 프로토콜(`GetNetworkConfig`)과 일치해야 한다. CSII는 인터페이스 v1.1.0 이후에서 UDP, v1.0.x에서 TCP를 사용한다. SDK는 센서의 인터페이스 세대로 CSII 전송 방식을 정하며, `csii_transport`로 이 선택을 덮어쓴다.
 
 > **E2E Protection** RDI/SHII/SPI/CSII 메시지와 Config API 요청·응답은 모두 20바이트 E2E 헤더(CRC 상위 0, CRC-32, Length, Counter, Data ID, Big-endian)를 포함한다. CRC는 본문만 보호하며, CRC 필드가 0인 메시지는 통과로 판정하지 않는다. 인터페이스는 검증 실패 메시지의 처분을 호스트에 맡긴다(Interface Overview §3.2.5). SDK는 기본 설정에서 경고 로그를 기록하고, 프레임을 판정 결과와 함께 전달한다. 판정 결과는 `AfiRdiFrame`, `AfiStreamMeta`, `AfiWirePayloadFrame`의 `e2e_counter`, `e2e_checked`, `e2e_valid`에 담긴다. `validate_e2e`는 데이터 스트림 검증의 사용 여부를 정하며, `e2e_strict = true`이면 검증 실패 프레임을 폐기한다. 검증에 실패한 Config API 응답도 호출자에게 반환하며, 그 판정 결과는 `GetLastSensorResult().e2e_ok`에서 확인한다. 인터페이스 v1.0.x 센서는 앞 8바이트에 Length, Counter, Data ID, 본문에 대한 CRC-64/XZ를 둔다. SDK는 수신 시 이 CRC를 허용하며, 송신 측 세대를 `generation`으로 알린다.
 
@@ -304,12 +304,12 @@ SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v
 
 SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요청으로 세대를 판정한다. 응답의 `if_version` 키는 v1.2.0 이후 세대를 표시한다. Config API를 끈 구성에서는 E2E 검증을 통과한 스트림 프레임으로 판정한다. 판정 결과는 `GetInterfaceGeneration()`(C++)과 `interface_generation`(Python)에서 확인한다. Discovery는 센서별 세대를 `AfiSensorInfo::generation`과 Python `_interface_generation` 키로 보고한다. v1.0.x 센서에서는 이 요청 직후 Config API 연결을 닫고, 이후의 Config API 호출을 송신하지 않고 반환한다. v1.0.x 센서는 해석하지 못한 v1.1.0 요청 가운데 Restart, ResetAllSettings 같은 일부 요청을 실행하기 때문이다.
 
-스트림 layout은 두 세대에서 같다. SDK는 모든 값을 변환하지 않고 전달하며, 아래 필드는 v1.0.x에서 의미가 다르다. 두 세대는 payload ISO23150 Header의 인터페이스 버전(`1.0.0` 또는 `1.1.0`)으로 구분한다.
+스트림 layout은 v1.0.x와 v1.1.0에서 같다. SDK는 모든 값을 변환하지 않고 전달하며, 아래 필드는 v1.0.x에서 의미가 다르다. 세대는 payload ISO23150 Header의 인터페이스 버전(`1.0.0`, `1.1.0` 또는 `1.2.0`)으로 구분한다.
 
 | 필드 | 인터페이스 v1.0.x | 인터페이스 v1.1.0 |
 |------|-------------------|-------------------|
 | RDI `existence_probability` | 표지값 100, 60, 40 | 확률 × 100, 증강 detection은 95 또는 90 |
-| RDI DataQualifier | 0, 5(주입 또는 시험 모드), 6 | 0, 1, 6 |
+| RDI DataQualifier | 0, 5(시험 모드), 6 | 0, 1, 6 |
 | RDI MessageCounter | 송신 카운터 | scan index, DataQualifier 6 재송신에서 반복 |
 | RDI RecognisedDetectionsCapability | 4096(FW 3.0.x) 또는 8192 | 2048 |
 | RDI 반경 속도 영역 | ±50 m/s(FW 3.0.0) | −111.11 m/s부터 |
@@ -478,7 +478,7 @@ TCP(기본값)에서는 각 인스턴스가 자기 센서의 IP로 접속하므�
 ```bash
 cmake .. -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build . --config Release
-ctest --output-on-failure
+ctest -C Release --output-on-failure
 ```
 
 CTest는 C++ 단위 테스트(`test_config_transport` 포함)를 실행하며, Python 3 인터프리터가 있으면 `test_python_streams`와 `test_python_sdk`도 실행한다. `test_python_config_transport`와 `test_python_firmware`는 `pytest`가 설치된 경우에 등록한다.
@@ -489,13 +489,13 @@ pip install pytest
 
 ### 통합 테스트
 
-실 센서에 연결한 상태의 실행 명령은 다음과 같다.
+실 센서에 연결한 상태에서 빌드 디렉터리에서 실행한다. Visual Studio 생성기에서는 C++ 시험 바이너리가 `test/Release/`에 생성된다.
 
 ```bash
 ./test/test_discovery
 ./test/test_config_api 192.168.10.150
 ./test/test_data_receive 192.168.10.150 60
-python test/test_live_conformance.py 192.168.10.150 --duration 30
+python ../test/test_live_conformance.py 192.168.10.150 --duration 30
 ```
 
 - `test_config_api`는 GET 요청만 송신한다. `--write`를 지정하면 진단 접근 모드에 진입하여 같은 값을 다시 기록한다. 모든 기록은 NVM에 저장되며, 레이더는 재부팅 전까지 진단 모드를 유지한다.
@@ -504,8 +504,8 @@ python test/test_live_conformance.py 192.168.10.150 --duration 30
 다음 시험은 센서 상태를 바꾸며, 확인 플래그 없이는 실행하지 않는다. 시험 전용 센서에만 사용한다.
 
 ```bash
-python test/test_live_write.py 192.168.10.150 --yes-mutate
-python test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>     [--bootloader --bl-hash <hash>] --yes-flash
+python ../test/test_live_write.py 192.168.10.150 --yes-mutate
+python ../test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>     [--bootloader --bl-hash <hash>] --yes-flash
 ./test/test_firmware_live 192.168.10.150 DIR/bootloader.bin <hash> --yes-flash
 ```
 
@@ -525,7 +525,7 @@ python test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash>  
 
 | 구조체 | 설명 |
 |--------|------|
-| `AfiRdiFrame` | SDK 콜백에서 전달되는 RDI 프레임, E2E 판정(`e2e_counter`, `e2e_checked`, `e2e_valid`)과 송신 측 `generation` 포함 |
+| `AfiRdiFrame` | SDK 콜백에서 전달되는 RDI 프레임, E2E 판정(`e2e_counter`, `e2e_checked`, `e2e_valid`)과 송신 측 `generation`, 인터페이스 v1.2.0의 chunk 수(`chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`) 포함 |
 | `bts_rdi_detection_t` | 개별 detection(51바이트), 위치·속도·측정 오차 포함 |
 | `bts_shi_message_t` | 센서 상태 정보 (가변 길이) |
 | `bts_spi_message_t` | 센서 성능 정보 |
@@ -575,7 +575,7 @@ AfiSdk
 - 데이터 콜백은 내부 수신 스레드에서 호출되므로, 콜백 처리는 블로킹 없이 유지하거나 별도 처리 스레드로 넘긴다.
 - RDI 손실 콜백은 E2E 검증을 통과한 프레임의 E2E Counter 결번으로 손실 송신 주기을 집계한다.
 - TCP 데이터 스트림은 연결이 끊기면 1초에서 최대 30초까지 늘어나는 간격으로 재연결한다.
-- `SendVehicleInput()`은 호출자 스레드에서 실행되며, 첫 호출 시 CSII 소켓을 생성한다. 인터페이스 v1.1.0에는 UDP, v1.0.x에는 TCP 소켓을 사용한다.
+- `SendVehicleInput()`은 호출자 스레드에서 실행되며, 첫 호출 시 CSII 소켓을 생성한다. 인터페이스 v1.1.0 이후에는 UDP, v1.0.x에는 TCP 소켓을 사용한다.
 - 각 Config API 연결은 인터페이스 세대를 판정하는 읽기 전용 GetDeviceInfo 요청으로 시작한다. v1.0.x이면 연결을 닫고, Config API 호출은 송신 없이 `kNotSupported`를 반환한다.
 - Config API 클라이언트는 요청을 한 번에 1건씩 송신하며, 각 응답이 요청의 message ID, client ID, session ID, 프로토콜 버전 `0x01`, RESPONSE 타입을 그대로 돌려주는지 검증한다. 타임아웃, 불일치 응답, 연결 소실이 발생하면 소켓을 닫고, 다음 호출에서 같은 endpoint로 재연결한다. 요청당 대기 시간은 `request_timeout_ms`로 제한하며, 본문이 16,384바이트를 넘는 요청은 송신하지 않고 `kInvalidParam`을 반환한다.
 - `Init()` 중 Config API 연결에 실패해도 `Init()`은 실패하지 않는다. SDK는 endpoint를 유지하며 다음 Config API 호출에서 연결한다. `Stop()` 이후 `Init()`을 다시 호출할 수 있다.

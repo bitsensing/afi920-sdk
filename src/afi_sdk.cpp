@@ -83,7 +83,7 @@ constexpr int kRdiPollMs = 20;
 
 } // namespace
 
-// ─── AfiSdk (facade) ───
+// --- AfiSdk (facade) ---
 
 AfiSdk::AfiSdk() : impl_(std::make_unique<Impl>()) {}
 AfiSdk::~AfiSdk() = default;
@@ -200,7 +200,7 @@ int AfiSdk::ResetConfigDefaults(const std::vector<std::string>& keys,
 
 #undef DELEGATE_CONFIG
 
-// ─── Impl ───
+// --- Impl ---
 
 AfiSdk::Impl::~Impl() {
     Stop();
@@ -423,7 +423,7 @@ int AfiSdk::Impl::ReconnectConfigApi(int timeout_ms) {
     }
 }
 
-// ─── CSII (Host → Radar) ───
+// --- CSII (Host -> Radar) ---
 
 int AfiSdk::Impl::SendVehicleInput(const AfiVehicleInput& input) {
     if (state_.load() == State::kNotInit) return kNotInitialized;
@@ -482,7 +482,7 @@ AfiInterfaceGeneration AfiSdk::Impl::Generation() const {
     return probed != AfiInterfaceGeneration::kUnknown ? probed : stream;
 }
 
-// ─── Thread Functions ───
+// --- Thread Functions ---
 
 void AfiSdk::Impl::RdiThreadFunc() {
     platform_set_thread_name("afi-rdi");
@@ -498,7 +498,7 @@ void AfiSdk::Impl::RdiThreadFunc() {
             ? rdi_tcp_->Receive(buf, kAfiWireFrameSafetyLimit)
             : rdi_udp_.Receive(buf.data(), buf.size());
         if (n > 0) ProcessRdiDatagram(buf.data(), static_cast<size_t>(n));
-        // Close a v1.2.0 scan whose header B never came (Interface Overview §3.2.3).
+        // Close a v1.2.0 scan whose header B never came (Interface Overview section 3.2.3).
         rdi_assembler_.Poll(SteadyNowNs(), rdi_emit_);
     }
 
@@ -543,7 +543,7 @@ void AfiSdk::Impl::SpiThreadFunc() {
 
 
 
-// ─── Datagram Processing ───
+// --- Datagram Processing ---
 
 bool AfiSdk::Impl::ConsumeE2eHeader(const uint8_t*& payload, size_t& payload_len,
                                     const char* stream_name,
@@ -635,8 +635,8 @@ void AfiSdk::Impl::TrackRdiLoss(uint32_t e2e_counter) {
         return;
     }
     // The E2E Counter advances once per send slot, so a gap is a missed
-    // slot (Interface Overview §3.2.3). A decrease marks a radar restart and starts a
-    // new baseline (§3.2.3). A repeat is not counted as loss.
+    // slot (Interface Overview section 3.2.3). A decrease marks a radar restart and starts a
+    // new baseline (section 3.2.3). A repeat is not counted as loss.
     const uint32_t delta = e2e_counter - last_rdi_e2e_counter_;
     last_rdi_e2e_counter_ = e2e_counter;
     if (delta == 0 || delta >= 0x80000000u) return;
@@ -769,7 +769,7 @@ void AfiSdk::Impl::ProcessShiDatagram(const uint8_t* data, size_t len) {
     if (!ValidateStreamMessage(data, len, kEventShii, "SHII", hdr)) return;
     if (someip_is_tp(hdr.message_type)) return;
 
-    // SHII is small (E2E 20B + variable payload ≤60B), no TP expected
+    // SHII is small (E2E 20B + variable payload <=60B), no TP expected
     const uint8_t* payload = data + kSomeipHeaderSize;
     size_t payload_len = len - kSomeipHeaderSize;
     const uint8_t* wire_payload = payload;

@@ -15,7 +15,7 @@ static constexpr size_t kRdiDetectionSize = BTS_RDI_DETECTION_SIZE;  // 51
 static constexpr size_t kRdiMaxDetections = BTS_RDI_LEGACY_MAX_DETECTIONS;
 
 void RdiParser::ParseDetectionHeader(const uint8_t* p, bts_rdi_message_t& msg) {
-    // ─── Common Interface Header (24 bytes) ───
+    // --- Common Interface Header (24 bytes) ---
     msg.interface_version.major = p[0];
     msg.interface_version.minor = p[1];
     msg.interface_version.patch = p[2];
@@ -28,11 +28,11 @@ void RdiParser::ParseDetectionHeader(const uint8_t* p, bts_rdi_message_t& msg) {
     msg.interface_cycle_time_variation = p[22];
     msg.data_qualifier = static_cast<bts_data_qualifier_t>(p[23]);
 
-    // ─── Ambiguity Domain (8 bytes: RadialVelocity begin/end) ───
+    // --- Ambiguity Domain (8 bytes: RadialVelocity begin/end) ---
     msg.ambiguity_domain.radial_velocity_begin = detail::unpack_le_f32(p + 24);
     msg.ambiguity_domain.radial_velocity_end   = detail::unpack_le_f32(p + 28);
 
-    // ─── Detection List Info (4 bytes) ───
+    // --- Detection List Info (4 bytes) ---
     msg.recognised_detections_capability = detail::unpack_le16(p + 32);
     msg.num_detections = detail::unpack_le16(p + 34);
 }
@@ -66,7 +66,7 @@ int RdiParser::Parse(const uint8_t* payload, size_t len, AfiRdiFrame& frame) {
         return -1;
     }
 
-    // ─── Parse Detections ───
+    // --- Parse Detections ---
     frame.detections_storage.resize(msg.num_detections);
     for (uint16_t i = 0; i < msg.num_detections; i++) {
         const uint8_t* det_ptr = payload + kRdiHeaderSize + i * kRdiDetectionSize;

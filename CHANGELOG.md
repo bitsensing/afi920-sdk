@@ -18,7 +18,18 @@ remain supported for data reception in this release only.
   IEEE 802.3 CRC-32 over the body only (CRC high word 0, KAT `0xCBF43926`),
   and Config API requests and responses carry it too (Data ID
   `0x6000 << 16 | Method ID`). Python `parse_e2e()` returns `crc_high` and
-  a 32-bit `crc`; `build_e2e_header()` writes CRC-32.
+  a 32-bit `crc`; `build_e2e_header()` writes CRC-32. In the C header
+  `bts_iso23150_e2e.h`, `BTS_E2E_OFF_CRC` is 4 (was 0) with the new
+  `BTS_E2E_OFF_CRC_HIGH` 0; `bts_e2e_crc64_update`,
+  `bts_e2e_apply_crc_contig`, `bts_e2e_apply_crc_split`,
+  `bts_e2e_pack_be64`, `BTS_E2E_CRC64_INIT` and `BTS_E2E_CRC64_XOROUT` are
+  removed; `bts_e2e_apply_crc(hdr, body, body_len)` writes the CRC-32.
+- **Interface headers on the include path** — only `bts_iso23150.h`,
+  `bts_iso23150_e2e.h` and `AFI920/bts_iso23150_{rdi,shi,spi,csii}.h` are
+  shipped and installed. `bts_iso23150_someip.h`, `generated/someip.h`,
+  `AFI920/generated/*.h` and the interface `.c` / `.cpp` sources are removed,
+  so the `bts_rdi_*`, `bts_shi_*`, `bts_spi_*` and `bts_csii_*` functions the
+  headers declare have no definition in the SDK; use the SDK API instead.
 - **Access modes** — config SETs, `ResetAllSettings` and
   `ResetConfigDefaults` require the Diagnostic mode and the firmware update
   chain the Programming mode; otherwise the sensor answers
@@ -41,7 +52,7 @@ remain supported for data reception in this release only.
   `filter_wheel_microdoppler` are removed.
 - **Diagnostic info** — `m7_snapshot_stale` / `m7_stale_cycles` are
   `status_snapshot_stale` / `status_stale_cycles` (C++ and Python).
-- **CSII over UDP** — on interface v1.1.0, `SendVehicleInput()` /
+- **CSII over UDP** — on interface v1.1.0 and later, `SendVehicleInput()` /
   `send_vehicle_input()` sends one UDP datagram per message to port 30501;
   `sensor_id` defaults to 1.
 - **Error codes** — sensor answers formerly reported as `kSensorError` map
@@ -50,9 +61,23 @@ remain supported for data reception in this release only.
   the C++ values (`DISCONNECTED` -1 → -5, `TIMEOUT` -2 → -4,
   `PROTOCOL_ERROR` -3 → -7, `NOT_SUPPORTED` -9 → -10); Python argument
   checks return `INVALID_PARAM` and a failed `init()` `CONNECT_FAILED`.
+- **SHII and SPI enumerators** — the interface headers drop or rename
+  `BTS_SHI_SOM_EVALUATION_MODE` (50), `BTS_SHI_SOM_CALIBRATION_MODE` (100),
+  `BTS_SHI_SOM_TEST_MODE` (201), `BTS_SHI_SDR_OUT_OF_ORDER` (2),
+  `BTS_SHI_SDR_INTERNAL_MEMORY_ERROR` (1), `BTS_SHI_SDR_COMMUNICATION_ERROR`
+  (4), `BTS_SHI_SDR_CONFIGURATION_ERROR` (6), `BTS_SHI_SDR_SOFTWARE_DEFECT`
+  (8), `BTS_SHI_SDR_COMPUTING_POWER` (9), `BTS_SHI_CPS_*` (now
+  `BTS_SHI_SCST_COMPLETED` 0, `_NOT_PERFORMED` 1, `_IN_PROGRESS` 2,
+  `_FAILED` 3) and `BTS_SPI_BS_UNKNOWN` (3). Value 100 is now
+  `BTS_SHI_SOM_FAULT_MODE`, defect reason 1 `BTS_SHI_SDR_SUPPLY_VOLTAGE_FAULT`
+  and calibration state 2 `BTS_SHI_SCST_IN_PROGRESS`. `afi/afi_compat.h`,
+  included by `afi_types.h`, keeps the old names with their v2.1.0 values as
+  deprecated constants, so existing code compiles with a warning that states
+  the current meaning; define `AFI_NO_COMPAT_NAMES` to omit them.
 - **Defaults** — `AfiPtpConfig::priority1` / `priority2` 255 (was 128);
-  `AfiRangeMode` gains value 6, so exhaustive `switch` statements need a
-  case.
+  `AfiDetectionFilter` turns `filter_ground_sidelobe` and
+  `filter_structure_multipath` on (were off); `AfiRangeMode` gains value
+  6, so exhaustive `switch` statements need a case.
 
 ### Added
 
@@ -155,7 +180,10 @@ remain supported for data reception in this release only.
   reconnect; `restart_sensor` waits for the Config API to return.
   `sample_pointcloud.py` does the same when it switches the transport and
   counts loss on the E2E Counter. `tools/rdi_udp_sender.py` emits the
-  current RDI layout.
+  interface v1.1.0 single-message RDI layout.
+  `sample_data_stream.py` no longer writes the sensor's stream transport: it
+  reads the configured transport and uses it, and decodes RDI through
+  `RdiStreamDecoder`, reporting partial scans.
 - **Integration guide** — `AFI920_SDK_GUIDE.md` / `AFI920_SDK_GUIDE_ko.md`
   describe the v2.2.0 API, access modes and firmware update.
 

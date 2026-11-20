@@ -34,11 +34,11 @@ int main(int argc, char* argv[]) {
 
     afi::AfiSdk sdk;
     if (sdk.Init(config) != afi::kOk) {
-        printf("Init failed — sensor unreachable at %s\n", config.sensor_ip.c_str());
+        printf("Init failed - sensor unreachable at %s\n", config.sensor_ip.c_str());
         return 1;
     }
 
-    // ── GET round-trip across all categories ──
+    // -- GET round-trip across all categories --
     afi::AfiDeviceInfo dev;          report("GetDeviceInfo", sdk.GetDeviceInfo(dev));
     afi::AfiSensorStatus status;     report("GetSensorStatus", sdk.GetSensorStatus(status));
     afi::AfiDiagnosticInfo diag;     report("GetDiagnosticInfo", sdk.GetDiagnosticInfo(diag));
@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
         return g_failed ? 1 : 0;
     }
 
-    // ── Write-backs of the same values (diagnostic access mode) ──
+    // -- Write-backs of the same values (diagnostic access mode) --
     report("EnterMode(diagnostic)", sdk.EnterMode(afi::AfiAccessMode::kDiagnostic));
     report("SetRangeMode(same)", sdk.SetRangeMode(mode));
     report("SetDetectionThreshold(same)", sdk.SetDetectionThreshold(th));

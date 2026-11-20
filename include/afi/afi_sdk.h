@@ -58,7 +58,7 @@ public:
     AfiSdk(const AfiSdk&) = delete;
     AfiSdk& operator=(const AfiSdk&) = delete;
 
-    // ─── Lifecycle ───
+    // --- Lifecycle ---
 
     /**
      * @brief Initialize SDK with given configuration
@@ -87,7 +87,7 @@ public:
      */
     bool IsRunning() const;
 
-    // ─── Data Callbacks ───
+    // --- Data Callbacks ---
 
     /**
      * @brief Register RDI (Radar Detection Interface) callback
@@ -120,7 +120,7 @@ public:
      * @brief Register the RDI send-slot loss callback
      *
      * Loss is counted from gaps in the RDI E2E Counter, which advances once
-     * per send slot (Interface Overview §3.2.3). MessageCounter repeats on DQ 6
+     * per send slot (Interface Overview section 3.2.3). MessageCounter repeats on DQ 6
      * resends and is not used. A counter decrease (radar restart) starts a
      * new baseline. Only frames whose E2E check passed advance the count
      * (the Counter is outside the CRC); with validate_e2e off every frame
@@ -145,7 +145,7 @@ public:
         std::function<void(const AfiWirePayloadFrame&)> cb);
 
 
-    // ─── Vehicle Input (CSII, Host → Radar) ───
+    // --- Vehicle Input (CSII, Host -> Radar) ---
 
     /**
      * @brief Send vehicle dynamics to the sensor (CSII stream)
@@ -161,13 +161,13 @@ public:
      */
     int SendVehicleInput(const AfiVehicleInput& input);
 
-    // ─── Discovery ───
+    // --- Discovery ---
 
     /**
      * @brief Discover AFI920 sensors on the network
      *
      * Sends UDP broadcast on port 30520 and collects responses.
-     * Static method — no AfiSdk instance required.
+     * Static method - no AfiSdk instance required.
      *
      * @param timeout_ms Discovery timeout in milliseconds (default: 3000)
      * @param port Discovery port (default: 30520)
@@ -178,7 +178,7 @@ public:
                                                 uint16_t port = 30520,
                                                 const std::string& bind_ip = "");
 
-    // ─── Config API: connection and last result ───
+    // --- Config API: connection and last result ---
 
     /**
      * @brief Radar outcome of the last Config API call
@@ -210,7 +210,7 @@ public:
      */
     int ReconnectConfigApi(int timeout_ms = 60000);
 
-    // ─── Config API: Access Mode (0x00Ex) ───
+    // --- Config API: Access Mode (0x00Ex) ---
 
     /// Current access mode, time in it, and whether data streams are halted.
     int GetMode(AfiModeStatus& out);
@@ -235,7 +235,7 @@ public:
     int EnterMode(AfiAccessMode target);
 
 
-    // ─── Config API: Device Info & Status (0x001x) ───
+    // --- Config API: Device Info & Status (0x001x) ---
 
     int GetDeviceInfo(AfiDeviceInfo& out);
     int GetSensorStatus(AfiSensorStatus& out);
@@ -254,7 +254,7 @@ public:
     int GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count,
                     AfiFaultLogPage& out);
 
-    // ─── Config API: Network (0x002x) ───
+    // --- Config API: Network (0x002x) ---
 
     int GetNetworkConfig(AfiNetworkConfig& out);
     /// Full update of the radar network and stream destinations (diagnostic
@@ -263,7 +263,7 @@ public:
     /// Partial update of one stream destination (NVM; applies after Restart)
     int SetStreamDestination(AfiStreamKind kind, const AfiStreamDestination& dst);
 
-    // ─── Config API: Range Mode (0x003x) ───
+    // --- Config API: Range Mode (0x003x) ---
 
     int GetRangeMode(AfiRangeMode& out);
     /// Stored in NVM; takes effect after Restart (the sensor reports
@@ -271,14 +271,14 @@ public:
     int SetRangeMode(AfiRangeMode mode);
     int SetRangeMode(AfiRangeMode mode, bool* restart_required);
 
-    // ─── Config API: Detection (0x004x) ───
+    // --- Config API: Detection (0x004x) ---
 
     int GetDetectionThreshold(AfiDetectionThreshold& out);
     int SetDetectionThreshold(const AfiDetectionThreshold& threshold);
     int GetDetectionFilters(AfiDetectionFilters& out);
     int SetDetectionFilters(const AfiDetectionFilters& filters);
 
-    // ─── Config API: Time Sync (0x005x) ───
+    // --- Config API: Time Sync (0x005x) ---
 
     /// Returns PTP profile plus live sync status (state, offset, master)
     int GetPtpConfig(AfiPtpConfig& out);
@@ -287,7 +287,7 @@ public:
     /// Same operation, also returning whether the sensor requires a restart
     int SetPtpConfig(uint8_t profile, bool* restart_required);
 
-    // ─── Config API: Mounting (0x007x) ───
+    // --- Config API: Mounting (0x007x) ---
 
     int GetMountingPosition(AfiMountingPosition& out);
     int SetMountingPosition(const AfiMountingPosition& pos);
@@ -296,7 +296,7 @@ public:
     int GetSensorPosition(AfiSensorPosition& out);
     int SetSensorPosition(const AfiSensorPosition& pos);
 
-    // ─── Config API: Firmware Update (0x008x) ───
+    // --- Config API: Firmware Update (0x008x) ---
 
     int FirmwareUpdateStart(const AfiOtaStartRequest& req, AfiOtaStartResponse& out);
     int FirmwareDataChunk(const uint8_t* data, size_t len);
@@ -309,7 +309,7 @@ public:
     int FirmwareUpdateReboot();
     int GetBootInfo(AfiBootInfo& out);
 
-    // ─── Config API: Config Persistence (0x009x) ───
+    // --- Config API: Config Persistence (0x009x) ---
 
     int GetConfigStatus(AfiConfigStatus& out);
     int ResetConfigDefaults(const std::vector<std::string>& keys,

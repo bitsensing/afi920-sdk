@@ -56,7 +56,7 @@ static bool is_valid_cfar_table(const std::vector<uint8_t>& table) {
 
 ConfigClient::ConfigClient(TcpClient& tcp) : tcp_(tcp) {}
 
-// ─── Core Request/Response ───
+// --- Core Request/Response ---
 
 int ConfigClient::SendJsonRequest(uint16_t method_id,
                                    const json& request_json,
@@ -144,7 +144,7 @@ int ConfigClient::SendJsonRequest(uint16_t method_id, json& response_data) {
     return SendJsonRequest(method_id, json::object(), response_data);
 }
 
-// ─── Device Info & Status (0x001x) ───
+// --- Device Info & Status (0x001x) ---
 
 int ConfigClient::GetDeviceInfo(AfiDeviceInfo& out) {
     json data;
@@ -230,7 +230,7 @@ static int hex_nibble(char c) {
     return -1;
 }
 
-// One record: kAfiFaultLogSlotSize bytes as 2 × kAfiFaultLogSlotSize hex digits.
+// One record: kAfiFaultLogSlotSize bytes as 2 x kAfiFaultLogSlotSize hex digits.
 static bool parse_fault_log_record(const json& item, std::vector<uint8_t>& out) {
     if (!item.is_string()) return false;
     const std::string& hex = item.get_ref<const std::string&>();
@@ -278,7 +278,7 @@ int ConfigClient::GetFaultLog(AfiFaultLogRing ring, uint32_t slot, uint8_t count
     return kOk;
 }
 
-// ─── Network (0x002x) ───
+// --- Network (0x002x) ---
 
 static void parse_stream_destination(const json& data, const char* prefix,
                                      uint16_t default_port, AfiStreamDestination& out) {
@@ -346,7 +346,7 @@ int ConfigClient::SetStreamDestination(AfiStreamKind kind, const AfiStreamDestin
     return SendJsonRequest(static_cast<uint16_t>(MethodId::kSetNetworkConfig), req, data);
 }
 
-// ─── Range Mode (0x003x) ───
+// --- Range Mode (0x003x) ---
 
 int ConfigClient::GetRangeMode(AfiRangeMode& out) {
     json data;
@@ -369,7 +369,7 @@ int ConfigClient::SetRangeMode(AfiRangeMode mode, bool* restart_required) {
     return rc;
 }
 
-// ─── Detection (0x004x) ───
+// --- Detection (0x004x) ---
 
 int ConfigClient::GetDetectionThreshold(AfiDetectionThreshold& out) {
     json data;
@@ -433,7 +433,7 @@ int ConfigClient::SetDetectionFilters(const AfiDetectionFilters& filters) {
     return SendJsonRequest(static_cast<uint16_t>(MethodId::kSetDetectionFilters), req, data);
 }
 
-// ─── Time Sync (0x005x) ───
+// --- Time Sync (0x005x) ---
 
 int ConfigClient::GetPtpConfig(AfiPtpConfig& out) {
     json data;
@@ -470,7 +470,7 @@ int ConfigClient::SetPtpConfig(uint8_t profile, bool* restart_required) {
     return kOk;
 }
 
-// ─── Mounting (0x007x) ───
+// --- Mounting (0x007x) ---
 
 int ConfigClient::GetMountingPosition(AfiMountingPosition& out) {
     json data;
@@ -518,7 +518,7 @@ int ConfigClient::SetSensorPosition(const AfiSensorPosition& pos) {
     return SendJsonRequest(static_cast<uint16_t>(MethodId::kSetSensorPosition), req, data);
 }
 
-// ─── Firmware Update (0x008x) ───
+// --- Firmware Update (0x008x) ---
 
 // The radar parses a crc32 string without "0x" as decimal (07.1), so bare
 // hex would be misread; give 8 bare hex digits their prefix.
@@ -608,7 +608,7 @@ int ConfigClient::GetBootInfo(AfiBootInfo& out) {
     return kOk;
 }
 
-// ─── Config Persistence (0x009x) ───
+// --- Config Persistence (0x009x) ---
 
 int ConfigClient::GetConfigStatus(AfiConfigStatus& out) {
     json data;
@@ -636,7 +636,7 @@ int ConfigClient::ResetConfigDefaults(const std::vector<std::string>& keys,
 }
 
 
-// ─── Access Mode (0x00Ex) ───
+// --- Access Mode (0x00Ex) ---
 
 static bool parse_mode_status(const json& data, AfiModeStatus& out) {
     const int mode = safe_value(data, "access_mode", -1);
@@ -683,7 +683,7 @@ int ConfigClient::EnterMode(AfiAccessMode target) {
     return SetMode(AfiAccessMode::kProgramming);
 }
 
-// ─── Raw Binary Request ───
+// --- Raw Binary Request ---
 
 int ConfigClient::SendRawRequest(uint16_t method_id,
                                   const uint8_t* payload, size_t len,

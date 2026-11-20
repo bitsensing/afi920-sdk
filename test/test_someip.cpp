@@ -80,7 +80,7 @@ TEST(event_ids_match_registry) {
     PASS("event_ids_match_registry");
 }
 
-// Interface v1.1.0 Method ID registry (01_API_Overview §4). Reserved IDs
+// Interface v1.1.0 Method ID registry (01_API_Overview section 4). Reserved IDs
 // (0x0013 always NOT_SUPPORTED, 0x0044/45, 0x0060/61, 0x0090, 0x00B0-B6)
 // have no SDK entry.
 TEST(method_ids_match_v110_registry) {

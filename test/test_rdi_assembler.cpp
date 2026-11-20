@@ -1,9 +1,9 @@
 /**
  * @file test_rdi_assembler.cpp
- * @brief Unit test: interface v1.2.0 RDI scan assembly (Interface Overview §3.2.3)
+ * @brief Unit test: interface v1.2.0 RDI scan assembly (Interface Overview section 3.2.3)
  *
  * Header and chunk bodies are cut from a single-message payload as
- * 03_RDI_Radar_Detections §1 lays them out.
+ * 03_RDI_Radar_Detections section 1 lays them out.
  */
 #include "protocol/rdi_assembler.h"
 #include "util/endian_util.h"

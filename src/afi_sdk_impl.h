@@ -1,6 +1,6 @@
 /**
  * @file afi_sdk_impl.h
- * @brief AfiSdk::Impl — internal implementation (PIMPL)
+ * @brief AfiSdk::Impl - internal implementation (PIMPL)
  *
  * Copyright (c) 2026 bitsensing Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -48,7 +48,7 @@ public:
     int Stop();
     bool IsRunning() const { return running_.load(); }
 
-    // CSII (Host → Radar vehicle input)
+    // CSII (Host -> Radar vehicle input)
     int SendVehicleInput(const AfiVehicleInput& input);
 
     // Config API probe first, then the last E2E-valid stream frame.
@@ -68,17 +68,17 @@ public:
     int ReconnectConfigApi(int timeout_ms);
 
 private:
-    // ─── Thread functions ───
+    // --- Thread functions ---
     void RdiThreadFunc();
     void ShiThreadFunc();
     void SpiThreadFunc();
 
-    // ─── Process a single UDP datagram ───
+    // --- Process a single UDP datagram ---
     void ProcessRdiDatagram(const uint8_t* data, size_t len);
     void ProcessShiDatagram(const uint8_t* data, size_t len);
     void ProcessSpiDatagram(const uint8_t* data, size_t len);
 
-    // ─── Strip and verify the 20B E2E header ───
+    // --- Strip and verify the 20B E2E header ---
     // Advances payload/payload_len past the E2E header. A failed check
     // (length, Data ID, CRC, zero CRC) is logged as a rate-limited warning
     // and the frame is still delivered; *e2e_valid reports the result.
@@ -86,7 +86,7 @@ private:
     // when e2e_strict is set and the check failed. The generation comes from
     // the E2E header refined by the ISO23150 Header after it; a body without
     // a ISO23150 Header (RDI chunk) passes its generation in known_generation.
-    // allow_zero_crc applies an exception to Interface Overview §3.2.5 for a
+    // allow_zero_crc applies an exception to Interface Overview section 3.2.5 for a
     // stream whose sender may leave the CRC out: a zero CRC field passes on
     // the Data ID and Length checks.
     bool ConsumeE2eHeader(const uint8_t*& payload, size_t& payload_len,
@@ -109,27 +109,27 @@ private:
                             bool e2e_valid,
                             const SomeipHeader& someip);
 
-    // ─── RDI ───
+    // --- RDI ---
     // Interface v1.2.0 header (0x8002) and chunk (0x8100 + k) messages.
     void ProcessRdiChunked(const uint8_t* data, size_t len, const SomeipHeader& hdr);
     // A closed v1.2.0 scan, or the scan of one single-format message.
     void DeliverRdiScan(AfiRdiFrame& frame);
 
-    // ─── RDI slot loss from the E2E Counter (Interface Overview §3.2.3) ───
+    // --- RDI slot loss from the E2E Counter (Interface Overview section 3.2.3) ---
     void TrackRdiLoss(uint32_t e2e_counter);
 
-    // ─── Platform ───
+    // --- Platform ---
     // MUST be first member: ensures WSAStartup before any socket operations.
     // On Linux/macOS this is a no-op.
     PlatformSocketInit socket_init_;
 
-    // ─── State ───
+    // --- State ---
     enum class State { kNotInit, kReady, kRunning, kStopped };
     std::atomic<State> state_{State::kNotInit};
     std::atomic<bool>  running_{false};
     AfiSdkConfig config_;
 
-    // ─── Transport ───
+    // --- Transport ---
     bool rdi_use_tcp_ = false;
     bool shi_use_tcp_ = false;
     bool spi_use_tcp_ = false;
@@ -145,7 +145,7 @@ private:
     // Generation of the last stream frame that passed the E2E check.
     std::atomic<AfiInterfaceGeneration> stream_generation_{AfiInterfaceGeneration::kUnknown};
 
-    // ─── CSII outbound (30501, socket created on first SendVehicleInput) ───
+    // --- CSII outbound (30501, socket created on first SendVehicleInput) ---
     // UDP on interface v1.1.0, TCP on v1.0.x (see CsiiUsesTcp).
     bool CsiiUsesTcp() const;
     TcpSender   csii_tcp_;
@@ -154,7 +154,7 @@ private:
     uint32_t    csii_counter_ = 0;
     uint16_t    csii_session_ = 0;
 
-    // ─── Protocol ───
+    // --- Protocol ---
     SomeipTpReassembler rdi_tp_{kAfiWirePayloadSafetyLimit};
     RdiParser rdi_parser_;
     RdiScanAssembler rdi_assembler_;
@@ -162,12 +162,12 @@ private:
     ShiParser shi_parser_;
     SpiParser spi_parser_;
 
-    // ─── Threads ───
+    // --- Threads ---
     std::unique_ptr<std::thread> rdi_thread_;
     std::unique_ptr<std::thread> shi_thread_;
     std::unique_ptr<std::thread> spi_thread_;
 
-    // ─── Stats ───
+    // --- Stats ---
     std::atomic<uint32_t> rdi_frame_seq_{0};
     std::atomic<uint32_t> total_packets_{0};
     std::atomic<uint32_t> lost_packets_{0};

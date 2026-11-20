@@ -3,9 +3,9 @@
  * @brief Sample: Receive RDI/SHII/SPI data streams from AFI920 sensor
  *
  * Demonstrates simultaneous reception of all four data stream types:
- *   - RDI (Radar Detection Interface) — point cloud detections
- *   - SHII (Sensor Health Information) — sensor health status
- *   - SPI (Sensor Performance Interface) — FOV, object types, reference targets
+ *   - RDI (Radar Detection Interface) - point cloud detections
+ *   - SHII (Sensor Health Information) - sensor health status
+ *   - SPI (Sensor Performance Interface) - FOV, object types, reference targets
  *
  * Usage: sample_data_stream [sensor_ip] [duration_sec]
  *
@@ -19,7 +19,7 @@
 #include <thread>
 #include <mutex>
 
-// ── Per-stream statistics ──
+// -- Per-stream statistics --
 
 struct StreamStats {
     std::atomic<uint32_t> frames{0};
@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
     printf("  Sensor:   %s\n", sensor_ip);
     printf("  Duration: %ds\n\n", duration);
 
-    // Configure — enable RDI/SHII/SPI, no Config API needed
+    // Configure - enable RDI/SHII/SPI, no Config API needed
     afi::AfiSdkConfig config;
     config.sensor_ip = sensor_ip;
     config.enable_rdi = true;
@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
 
     afi::AfiSdk sdk;
 
-    // ── RDI callback ──
+    // -- RDI callback --
     sdk.RegRecvCallback([](const afi::AfiRdiFrame& frame) {
         g_rdi.frames.fetch_add(1);
 
@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // ── SHII callback ──
+    // -- SHII callback --
     sdk.RegRecvCallback([](const afi::AfiShiMessage& msg) {
         g_shi.frames.fetch_add(1);
 
@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // ── SPI callback ──
+    // -- SPI callback --
     sdk.RegRecvCallback([](const afi::AfiSpiMessage& msg) {
         g_spi.frames.fetch_add(1);
 
@@ -147,7 +147,7 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // ── RDI packet loss callback ──
+    // -- RDI packet loss callback --
     sdk.RegRecvCallback([](uint32_t total, uint32_t lost) {
         printf("*** RDI packet loss: %u lost / %u total (%.2f%%)\n",
                lost, total, 100.0 * lost / total);
@@ -184,7 +184,7 @@ int main(int argc, char* argv[]) {
 
     sdk.Stop();
 
-    // ── Print results (same table format as Python) ──
+    // -- Print results (same table format as Python) --
     uint32_t rdi_f = g_rdi.frames.load();
     uint32_t shi_f = g_shi.frames.load();
     uint32_t spi_f = g_spi.frames.load();
@@ -202,7 +202,7 @@ int main(int argc, char* argv[]) {
         printf("  %-6s %8u %8s\n", "SPI",  spi_f, "-");
     }
 
-    // ── First RDI frame details ──
+    // -- First RDI frame details --
     {
         std::lock_guard<std::mutex> lock(g_rdi_mutex);
         if (g_rdi_first_captured) {

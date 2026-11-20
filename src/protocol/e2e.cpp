@@ -72,7 +72,7 @@ E2eStatus e2e_validate(const uint8_t* buf, size_t len, E2eHeader& out,
     }
     if (!check_crc) return E2eStatus::kOk;
 
-    // Interface Overview §3.2.5: a zero CRC field is never a pass, except under the
+    // Interface Overview section 3.2.5: a zero CRC field is never a pass, except under the
     // allow_zero_crc exception, which rests on the Data ID and Length checks
     // above.
     if (out.crc_high == 0 && out.crc == 0) {

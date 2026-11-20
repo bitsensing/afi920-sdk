@@ -25,7 +25,7 @@
 
 namespace afi {
 
-// ─── Data Stream Types ───
+// --- Data Stream Types ---
 
 /**
  * @brief Interface generation a sensor speaks (afi920_interface)
@@ -57,9 +57,9 @@ struct AfiRdiFrame {
     uint32_t          frame_seq = 0;      ///< SDK internal frame sequence number
     std::vector<bts_rdi_detection_t> detections_storage; ///< Detection storage
 
-    // E2E outcome (Interface Overview §3.2.5). A failed check is delivered unless
+    // E2E outcome (Interface Overview section 3.2.5). A failed check is delivered unless
     // AfiSdkConfig::e2e_strict, so a consumer can tell the two apart here.
-    uint32_t e2e_counter = 0;             ///< E2E Counter (send slot, §3.2.3)
+    uint32_t e2e_counter = 0;             ///< E2E Counter (send slot, section 3.2.3)
     bool     e2e_checked = false;         ///< validate_e2e was on
     bool     e2e_valid = false;           ///< Length, Data ID and CRC checks passed
     /// Generation of the sender. The E2E header separates v1.0.x (CRC-64/XZ
@@ -67,7 +67,7 @@ struct AfiRdiFrame {
     /// and the ISO23150 Header InterfaceVersionID mark v1.2.x.
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
 
-    /// Interface v1.2.0 header/chunk scan (Interface Overview §3.2.3). chunk_count is
+    /// Interface v1.2.0 header/chunk scan (Interface Overview section 3.2.3). chunk_count is
     /// the List Layout ChunkCount and chunks_received the chunk messages
     /// used. A scan with missing chunks is delivered with the detections it
     /// has, so message.num_detections can be below announced_detections (the
@@ -187,15 +187,16 @@ using AfiSpiMessage = bts_spi_message_t;
  */
 struct AfiStreamMeta {
     uint64_t recv_timestamp_ns = 0;   ///< Host receive time (steady clock)
-    uint32_t e2e_counter = 0;         ///< E2E Counter (send slot, §3.2.3)
+    uint32_t e2e_counter = 0;         ///< E2E Counter (send slot, section 3.2.3)
     bool e2e_checked = false;         ///< validate_e2e was on
     bool e2e_valid = false;           ///< Length, Data ID and CRC checks passed
-    /// Generation of the sender, from the E2E header (see AfiRdiFrame).
+    /// Generation of the sender, from the E2E header and the ISO23150 Header
+    /// interface version (see AfiRdiFrame).
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
 };
 
 
-// ─── Enums ───
+// --- Enums ---
 
 /**
  * @brief Radar range mode (registry: 0=DR, 1=LR, 2=MR, 3=SR, 4=ULR, 5=USR, 6=UDR)
@@ -225,7 +226,7 @@ inline const char* AfiRangeModeName(AfiRangeMode mode) {
 }
 
 /**
- * @brief Vehicle input (CSII) — host-provided vehicle dynamics
+ * @brief Vehicle input (CSII) - host-provided vehicle dynamics
  *
  * Sent to the sensor's port 30501 (Event 0x8001), typically every 100 ms:
  * one UDP datagram on interface v1.1.0, a TCP stream on v1.0.x.
@@ -254,7 +255,7 @@ struct AfiVehicleInput {
     bts_csii_gear_position_t gear_position = BTS_CSII_GP_NEUTRAL;
 };
 
-// ─── Discovery ───
+// --- Discovery ---
 
 /**
  * @brief Sensor information from Discovery response
@@ -330,9 +331,9 @@ struct AfiSensorInfo {
     AfiInterfaceGeneration generation = AfiInterfaceGeneration::kUnknown;
 };
 
-// ─── Config API Response Types ───
+// --- Config API Response Types ---
 
-/// Radar outcome of the last Config API call (Interface Overview §4).
+/// Radar outcome of the last Config API call (Interface Overview section 4).
 struct AfiSensorResult {
     int return_code = -1;        ///< Radar return code (AfiReturnCode); -1 when no response arrived
     std::string return_name;     ///< Radar's name for return_code, e.g. "SESSION_REQUIRED"
@@ -400,7 +401,7 @@ static constexpr size_t  kAfiFaultLogSlotSize = 128;  ///< Bytes per slot
 static constexpr uint8_t kAfiFaultLogPageMax  = 12;   ///< Slots per request
 
 /// One GetFaultLog page. Slots are raw and unchecked: the host checks magic,
-/// seq and crc32 (Device & Status §01.7) and orders the records by seq.
+/// seq and crc32 (Device & Status section 01.7) and orders the records by seq.
 struct AfiFaultLogPage {
     AfiFaultLogRing ring = AfiFaultLogRing::kFault;
     uint32_t slots = 0;        ///< Slots in the ring
@@ -522,7 +523,7 @@ struct AfiPtpConfig {
     int64_t mean_path_delay_ns = 0;
     std::string master_clock_id;
 
-    // v1.0.2 fields are appended to preserve the original member order.
+    // Later fields are appended to preserve the original member order.
     uint8_t configured_profile = 0;   ///< Pending NVM profile
     std::string configured_profile_name;
     bool restart_required = false;    ///< configured_profile != profile
@@ -571,7 +572,7 @@ struct AfiOtaStartResponse {
 
 /// FirmwareDataChunk (0x0081) answer. A chunk may be accepted only in part
 /// (256 B pages, behind the slot erase); received_bytes is the next offset
-/// and the unaccepted tail is sent again (07_Firmware_Update §07.A).
+/// and the unaccepted tail is sent again (07_Firmware_Update section 07.A).
 struct AfiOtaChunkResult {
     uint32_t received_bytes = 0;
     uint32_t total_bytes = 0;
@@ -632,3 +633,5 @@ struct AfiModeStatus {
 };
 
 } // namespace afi
+
+#include "afi_compat.h"

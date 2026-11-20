@@ -4,7 +4,7 @@
 |------|-------|
 | Audience | AI coding assistants, LLM-driven automation, and engineers who need the shortest path from a bitsensing AFI920 4D imaging radar to working code |
 | SDK version | 2.2.0 (C++ and Python) |
-| Sensor interface | AFI920 interface v1.1.0 (firmware v3.1.1). Interface v1.0.x (firmware 3.0.0 to 3.1.0) is supported for data only, see [section 13](#13-interface-v10x-compatibility) |
+| Sensor interface | AFI920 interface v1.2.0 and v1.1.0 (firmware v3.1.1). Interface v1.0.x (firmware 3.0.0 to 3.1.0) is supported for data only, see [section 13](#13-interface-v10x-compatibility) |
 | License | BSD-3-Clause |
 | Full API reference | [docs/api_reference.md](docs/api_reference.md) |
 
@@ -41,7 +41,7 @@ The AFI920 SDK connects a host computer to one or more bitsensing AFI920 radars 
 | Radar → Host | RDI (TCP/UDP 30509, Event `0x8002`) | Point cloud detections (range, azimuth, elevation, radial velocity, RCS, SNR, errors) |
 | Radar → Host | SHII (TCP/UDP 30510, Event `0x8003`) | Sensor health information |
 | Radar → Host | SPI (TCP/UDP 30511, Event `0x8004`) | Sensor performance and mounting pose |
-| Host → Radar | CSII (30501, Event `0x8001`; UDP on v1.1.0, TCP on v1.0.x) | Vehicle dynamics |
+| Host → Radar | CSII (30501, Event `0x8001`; UDP on v1.1.0 and later, TCP on v1.0.x) | Vehicle dynamics |
 | Host ↔ Radar | Config API (TCP 30500, SOME/IP + JSON) | Status, settings, access modes, firmware update |
 | Host ↔ Radar | Discovery (UDP broadcast 30520) | Find sensors on the LAN |
 
@@ -149,7 +149,7 @@ cmake --build build --config Release
 | CMake option | Default | Description |
 |--------------|---------|-------------|
 | `BUILD_EXAMPLES` | `ON` | Build `examples/cpp` |
-| `BUILD_TESTS` | `OFF` | Build `test/` (run with `ctest --output-on-failure` in the build directory) |
+| `BUILD_TESTS` | `OFF` | Build `test/` (run with `ctest -C Release --output-on-failure` in the build directory; `-C` names the configuration of a multi-config generator such as Visual Studio) |
 
 **Link from your own CMakeLists.txt:**
 
@@ -218,9 +218,8 @@ The Python `AfiSdk` class covers the Config API, CSII and Discovery. It opens no
 
 ```python
 import socket, struct
-from afi_sdk.someip import SOMEIP_HEADER_SIZE, DEFAULT_RDI_PORT
-from afi_sdk.streams import (E2E_DATA_ID_RDI, strip_e2e,
-                             parse_rdi_frame, parse_rdi_detection)
+from afi_sdk.someip import DEFAULT_RDI_PORT
+from afi_sdk.streams import RdiStreamDecoder, parse_rdi_frame, parse_rdi_detection
 
 def recv_exact(sock, n):
     buf = b""
@@ -232,6 +231,7 @@ def recv_exact(sock, n):
     return buf
 
 sock = socket.create_connection(("192.168.10.150", DEFAULT_RDI_PORT))   # TCP RDI stream
+decoder = RdiStreamDecoder()                      # v1.2.0 header/chunk scans and single-message scans
 
 while True:
     hdr = recv_exact(sock, 8)                        # SOME/IP Message ID (4) + Length (4)
@@ -239,19 +239,20 @@ while True:
         break
     length = struct.unpack(">I", hdr[4:8])[0]
     data = hdr + recv_exact(sock, length)            # one complete SOME/IP message
-    e2e, iso = strip_e2e(data[SOMEIP_HEADER_SIZE:], expected_data_id=E2E_DATA_ID_RDI)
-    if e2e is None or not e2e["ok"]:
-        continue                                     # failed checks are logged; the body is kept
-    frame = parse_rdi_frame(iso)                     # 36 B header
-    if not frame:
-        continue
-    print(f"detections={frame['num_detections']}  counter={frame['message_counter']}  "
-          f"dq={frame['data_qualifier']}")
-    if frame["num_detections"] > 0:
-        d = parse_rdi_detection(iso, frame["det_start"], 0)          # 51 B per detection
-        print(f"  r={d['radial_distance']:.2f} m  az={d['azimuth']:.3f} rad  "
-              f"el={d['elevation']:.3f} rad  v={d['radial_velocity']:.2f} m/s  "
-              f"rcs={d['rcs']:.1f} dBsm")
+    for scan in decoder.feed(data):                  # one dict per scan, every interface generation
+        if not scan["e2e_valid"]:
+            continue                                 # failed checks are logged
+        iso = scan["payload"]
+        frame = parse_rdi_frame(iso)                 # 36 B header
+        if not frame:
+            continue
+        print(f"detections={frame['num_detections']}  counter={frame['message_counter']}  "
+              f"dq={frame['data_qualifier']}")
+        if frame["num_detections"] > 0:
+            d = parse_rdi_detection(iso, frame["det_start"], 0)          # 51 B per detection
+            print(f"  r={d['radial_distance']:.2f} m  az={d['azimuth']:.3f} rad  "
+                  f"el={d['elevation']:.3f} rad  v={d['radial_velocity']:.2f} m/s  "
+                  f"rcs={d['rcs']:.1f} dBsm")
 ```
 
 DataQualifier `0` marks new scan data, `6` a resend of the previous scan (MessageCounter repeats), and `1` content that must not be used.
@@ -335,7 +336,7 @@ Use `E2E_DATA_ID_RDI`, `E2E_DATA_ID_SHII` and `E2E_DATA_ID_SPI` as `expected_dat
 
 ## 7. Access Modes and Persistence
 
-Interface v1.1.0 gates the Config API by access mode. Every config SET needs the diagnostic mode, and the firmware update chain needs the programming mode. Entry is one way, Normal → Diagnostic → Programming. Only a reboot (or the radar's own communication-stack recovery) returns the radar to Normal.
+Interface v1.1.0 and later gate the Config API by access mode. Every config SET needs the diagnostic mode, and the firmware update chain needs the programming mode. Entry is one way, Normal → Diagnostic → Programming. Only a reboot (or the radar's own communication-stack recovery) returns the radar to Normal.
 
 | Mode | Value | Opens | Data streams |
 |------|-------|-------|--------------|
@@ -583,7 +584,7 @@ Signatures and field tables are in [docs/api_reference.md](docs/api_reference.md
 
 ## 9. Firmware Update
 
-The firmware update chain runs in the programming access mode, which halts RDI, SHII and SPI until the radar reboots. The radar must be on interface v1.1.0.
+The firmware update chain runs in the programming access mode, which halts RDI, SHII and SPI until the radar reboots. The radar must be on interface v1.1.0 or later.
 
 | `update_type` | Components | Written to |
 |---------------|------------|------------|
@@ -773,7 +774,7 @@ sdk.close()
 | Item | Behaviour |
 |------|-----------|
 | Precondition | C++: after `Init()`; `Start()` is not needed. Python: after `init()` |
-| Transport | One UDP datagram on interface v1.1.0, a TCP connection on v1.0.x, chosen from the interface generation. UDP while the generation is unknown. `csii_transport = "udp"` / `"tcp"` forces one |
+| Transport | One UDP datagram on interface v1.1.0 and later, a TCP connection on v1.0.x, chosen from the interface generation. UDP while the generation is unknown. `csii_transport = "udp"` / `"tcp"` forces one |
 | Threading | Runs on the caller's thread, serialized internally |
 | Errors | C++: `kNotInitialized` before `Init()`, `kConnectFailed` when the socket cannot be created or connected or the send fails. Python: `NOT_INITIALIZED`, `DISCONNECTED` |
 | Access mode | Accepted in every mode |
@@ -825,7 +826,7 @@ Discovery broadcasts one request on UDP 30520 and collects responses for one tim
 auto sensors = afi::AfiSdk::Discover(3000, 30520, "192.168.10.100");
 for (const auto& s : sensors) {
     printf("%s  %s  sw=%s  gen=%d\n", s.serial_number.c_str(), s.ip.c_str(),
-           s.software_version.c_str(), static_cast<int>(s.generation));   // 1 = v1.0.x, 2 = v1.1.0
+           s.software_version.c_str(), static_cast<int>(s.generation));   // 1 = v1.0.x, 2 = v1.1.0, 3 = v1.2.x
 }
 ```
 
@@ -853,7 +854,7 @@ for s in AfiSdk.discover(timeout_s=3.0, bind_ip="192.168.10.100"):
 | `position_code`, `offset_x/y/z`, `yaw_deg`, `pitch_deg`, `roll_deg` | Mounting values |
 | `radar_active`, `scan_index`, `uptime_seconds` | Operation state, current MessageCounter, uptime (s) |
 | `ptp_state`, `ptp_offset_ns` | PTP status |
-| `generation` | `kV1_0` when the response holds `driver_hash`, `kV1_1` when it holds an `m72_*` key |
+| `generation` | From `if_version` when the response holds the key (interface v1.2.0 and later, `kV1_2`); otherwise `kV1_0` when the response holds `driver_hash`, `kV1_1` when it holds an `m72_*` key |
 
 The Python dict carries the radar IP under `ip_address` and the uptime under `scan_status.uptime_seconds`.
 
@@ -926,14 +927,15 @@ The SDK receives data from sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0)
 
 Interface v1.2.0 sends one RDI scan as header A, chunk messages and header B (SOME/IP Interface Version 0x02; Events `0x8002` and `0x8100` to `0x814B`, one E2E Data ID per Event). The SDK assembles them into one `AfiRdiFrame` per scan by the E2E Counter (Interface Overview §3.2.3), so an RDI callback receives the same frame from every generation. A scan with missing chunks is delivered with the detections that arrived: `chunk_count`, `chunks_received`, `announced_detections` and `IsComplete()` report it, and a scan without any header message is dropped. The payload callback receives every message with its `event_id` and `someip_interface_version`. Python receivers use `streams.RdiStreamDecoder`, which returns one single-message RDI payload per scan for `parse_rdi_frame`.
 
-| Function | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
-|----------|-----------------------------|--------------------------------------|
-| Discovery | Supported | Supported |
-| RDI, SHII, SPI reception | Supported | Supported |
-| E2E CRC | CRC-32 (IEEE 802.3) over the body; CRC high word 0 | CRC-64/XZ over Length, Counter, Data ID and the body, in bytes 0 to 7; accepted on receive |
-| CSII | One UDP datagram to port 30501 | TCP connection to port 30501 |
-| Config API | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
-| Firmware update | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
+| Function | Interface v1.2.0 | Interface v1.1.0 (FW 3.1.1) | Interface v1.0.x (FW 3.0.0 to 3.1.0) |
+|----------|------------------|-----------------------------|--------------------------------------|
+| Discovery | Supported (`if_version`) | Supported | Supported |
+| RDI reception | Header/chunk messages, one `AfiRdiFrame` per scan | One message per scan | One message per scan |
+| SHII, SPI reception | Supported | Supported | Supported |
+| E2E CRC | CRC-32 (IEEE 802.3) over the body; CRC high word 0 | CRC-32 (IEEE 802.3) over the body; CRC high word 0 | CRC-64/XZ over Length, Counter, Data ID and the body, in bytes 0 to 7; accepted on receive |
+| CSII | One UDP datagram to port 30501 | One UDP datagram to port 30501 | TCP connection to port 30501 |
+| Config API | Supported | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
+| Firmware update | Supported | Supported | `kNotSupported` / `NOT_SUPPORTED`, nothing sent |
 
 How the SDK learns the generation:
 
@@ -941,10 +943,10 @@ How the SDK learns the generation:
 - With the Config API off, the generation comes from the last stream frame that passed the E2E check.
 - `GetInterfaceGeneration()` (C++) / `interface_generation` (Python) report `kUnknown` (0), `kV1_0` (1), `kV1_1` (2) or `kV1_2` (3) / `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`, `INTERFACE_GEN_V1_2`.
 - Interface v1.2.0 adds the `if_version` key to Discovery and GetDeviceInfo. The SDK reads it first; the E2E header alone cannot tell v1.1.0 from v1.2.0, so stream frames mark v1.2.0 by the RDI framing and the ISO23150 Header interface version.
-- Per frame: `generation` in `AfiRdiFrame`, `AfiStreamMeta` and `AfiWirePayloadFrame`; Python `strip_e2e()` returns `e2e["generation"]`. Per sensor: `AfiSensorInfo::generation` and the Python Discovery key `_interface_generation` (`discovery_generation(info)`).
+- Per frame: `generation` in `AfiRdiFrame`, `AfiStreamMeta` and `AfiWirePayloadFrame`; Python `strip_e2e()` returns `e2e["generation"]` from the E2E header alone (`INTERFACE_GEN_V1_0` or `INTERFACE_GEN_V1_1`), and `RdiStreamDecoder` scans carry `INTERFACE_GEN_V1_2` for interface v1.2.0 RDI. Per sensor: `AfiSensorInfo::generation` and the Python Discovery key `_interface_generation` (`discovery_generation(info)`).
 - With the Config API off and before the first stream frame, the generation is unknown and CSII uses UDP. Set `csii_transport = "tcp"` to reach a v1.0.x sensor from the first call.
 
-The stream layouts are the same in both generations and the SDK passes every value through unchanged. These fields mean different things on v1.0.x; the ISO23150 Header interface version (`1.0.0` or `1.1.0`) tells the generations apart.
+The stream layouts of v1.0.x and v1.1.0 are the same and the SDK passes every value through unchanged. These fields mean different things on v1.0.x; the ISO23150 Header interface version (`1.0.0`, `1.1.0` or `1.2.0`) tells the generations apart.
 
 | Field | Interface v1.0.x | Interface v1.1.0 |
 |-------|------------------|------------------|
@@ -975,7 +977,7 @@ On interface v1.2.0 the RDI ambiguity domain is computed per frame (`radial_velo
 | `csii_port` | `30501` | CSII destination port |
 | `stream_transport` | `"tcp"` | Default stream transport, `"tcp"` or `"udp"` |
 | `rdi_transport`, `shi_transport`, `spi_transport` | empty | Per-stream override; empty uses `stream_transport` |
-| `csii_transport` | empty | Empty picks it from the generation (UDP on v1.1.0, TCP on v1.0.x, UDP while unknown); `"udp"` or `"tcp"` forces one |
+| `csii_transport` | empty | Empty picks it from the generation (UDP on v1.1.0 and later, TCP on v1.0.x, UDP while unknown); `"udp"` or `"tcp"` forces one |
 | `enable_rdi` | `true` | Receive RDI |
 | `enable_shi` | `false` | Receive SHII |
 | `enable_spi` | `false` | Receive SPI |
@@ -1001,7 +1003,11 @@ The Python `AfiSdkConfig` dataclass has `sensor_ip`, `config_port`, `csii_port`,
 | `e2e_counter` | `uint32_t` | E2E Counter (send slot) |
 | `e2e_checked` | `bool` | `validate_e2e` was on |
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
-| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header |
+| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header, the RDI framing and the ISO23150 Header interface version |
+| `chunk_count` | `uint16_t` | Interface v1.2.0 scan: chunk messages the header announces; `0` on a single-message scan |
+| `chunks_received` | `uint16_t` | Chunk messages that arrived |
+| `announced_detections` | `uint16_t` | Detections the header announces; `message.num_detections` is lower when chunks are missing |
+| `IsComplete()` | `bool` | `chunks_received == chunk_count` and `message.num_detections == announced_detections` |
 
 `message` holds the ISO23150 Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 sends at most 2048.
 
@@ -1012,7 +1018,7 @@ Positions are spherical. Convert to Cartesian in your own code if needed.
 | C++ field | Python key (`parse_rdi_detection`) | Unit | Description |
 |-----------|------------------------------------|------|-------------|
 | `existence_probability` | `existence_probability` | % | 0 to 100 (1 to 100 from interface v1.2.0) |
-| `detection_id` | `detection_id` | | `0xFFFF` if unused |
+| `detection_id` | `detection_id` | | 0-based index in the scan on interface v1.2.0; `0xFFFF` if unused on earlier versions |
 | `object_id_reference` | `object_id_reference` | | Associated object ID (reserved) |
 | `timestamp_difference` | `timestamp_difference` | s | Offset to the message timestamp |
 | `radar_cross_section` | `rcs` | dBsm | Radar cross-section |
@@ -1039,7 +1045,7 @@ ISO23150 Header fields, `num_valid_operation_modes` / `sensor_operation_modes[]`
 | `sensor_pose.origin_point_x/y/z` | Mounting position (m) |
 | `sensor_pose.orientation_yaw/pitch/roll` | Mounting orientation (rad) |
 | `sensor_pose.orientation_error_yaw/pitch` | Orientation errors (rad) |
-| `num_fov_segments`, `fov_segments[]` | Azimuth and elevation limits, `blockage_status` (`BTS_SPI_BS_NONE`, `_PARTIAL_BLOCKAGE`, `_FULL_BLOCKAGE`, `_UNKNOWN`) |
+| `num_fov_segments`, `fov_segments[]` | Azimuth and elevation limits, `blockage_status` (`BTS_SPI_BS_NONE`, `_PARTIAL_BLOCKAGE`, `_FULL_BLOCKAGE`) |
 | `num_recognisable_object_types`, `recognisable_object_types[]` | Object class and detection range |
 | `num_reference_target_types`, `reference_target_types[]` | RCS, detection range and SNR of reference targets |
 
@@ -1062,8 +1068,8 @@ The Config API rotation (`AfiRotation`, `get_rotation()`) is in degrees; the SPI
 |------|--------|
 | `AfiModeStatus` | `access_mode` (`AfiAccessMode`), `access_mode_name` (`"normal"` / `"diagnostic"` / `"programming"`), `elapsed_ms`, `streams_halted` |
 | `AfiSensorResult` | `return_code` (`-1` when no response arrived), `return_name` (for example `"SESSION_REQUIRED"`), `error_message` (firmware update methods), `e2e_ok` |
-| `AfiInterfaceGeneration` | `kUnknown` (0), `kV1_0` (1), `kV1_1` (2) |
-| `AfiDeviceInfo` | `serial_number`, `mac_address`, `vlan_id`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash` |
+| `AfiInterfaceGeneration` | `kUnknown` (0), `kV1_0` (1), `kV1_1` (2), `kV1_2` (3) |
+| `AfiDeviceInfo` | `serial_number`, `mac_address`, `vlan_id`, `model_name`, `hw_version`, `software_version`, `bootloader_hash`, `fw_hash`, `if_version` (empty before interface v1.2.0) |
 | `AfiSensorStatus` | `operation_state`, `operation_state_code`, `temperature_mcu`, `temperature_rf`, `voltage`, `uptime_sec` |
 | `AfiNetworkConfig` | `ip_address`, `subnet_mask`, `gateway`, `api_port`, `vlan_id`, `detection`, `health`, `performance` (`AfiStreamDestination`: `ip`, `port`, `protocol`) |
 | `AfiFaultLogPage` | `ring` (`AfiFaultLogRing::kFault` / `kSample`), `slots`, `head`, `boot_count`, `slot`, `records` (128 B raw slots) |
@@ -1115,7 +1121,7 @@ C++ codes are the `afi::AfiError` enum in `afi_error.h`. Python constants have t
 | Port | Proto | Dir | Event ID | E2E Data ID | Purpose |
 |------|-------|-----|----------|-------------|---------|
 | 30500 | TCP | ↔ | | `0x6000 << 16 \| Method ID` | Config API (SOME/IP + JSON; raw binary firmware chunks), Method IDs `0x0010` to `0x00E1` |
-| 30501 | UDP (v1.1.0), TCP (v1.0.x) | → | `0x8001` | `0x60008001` | CSII vehicle input |
+| 30501 | UDP (v1.1.0 and later), TCP (v1.0.x) | → | `0x8001` | `0x60008001` | CSII vehicle input |
 | 30509 | TCP/UDP | ← | `0x8002` | `0x60008002` | RDI point cloud |
 | 30510 | TCP/UDP | ← | `0x8003` | `0x60008003` | SHII health |
 | 30511 | TCP/UDP | ← | `0x8004` | `0x60008004` | SPI performance |
@@ -1138,7 +1144,7 @@ TCP / UDP
 
 | E2E offset | Size | Field | Description |
 |------------|------|-------|-------------|
-| 0 | 4 | CRC high | `0x00000000` on interface v1.1.0 |
+| 0 | 4 | CRC high | `0x00000000` on interface v1.1.0 and later |
 | 4 | 4 | CRC | IEEE 802.3 CRC-32 over the body only (KAT `0xCBF43926`). A zero CRC never passes |
 | 8 | 4 | Length | Body length, excluding the 20-byte header |
 | 12 | 4 | Counter | Data streams: send slot. Config API: sequence |

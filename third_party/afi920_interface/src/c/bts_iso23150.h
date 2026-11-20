@@ -56,8 +56,8 @@ typedef enum {
 #define BTS_SOMEIP_EVENT_SECURITY       (0x8008u)  /* Security Event, reserved, not transmitted */
 #define BTS_SOMEIP_EVENT_RDI_CHUNK_BASE (0x8100u)  /* RDI chunk k = base + k, k = 0..75 */
 
-/* interface 판. ISO23150 Header InterfaceVersionID(RDI · SHII · SPI)와 Discovery · GetDeviceInfo `if_version` 이
- * 이 값을 싣는다. SOME/IP Interface Version(아래)과 별개이다. */
+/* Interface version. The ISO23150 Header InterfaceVersionID (RDI, SHII, SPI) and the
+ * Discovery and GetDeviceInfo `if_version` key carry it. Separate from the SOME/IP Interface Version below. */
 #define BTS_INTERFACE_VERSION_MAJOR     (1u)
 #define BTS_INTERFACE_VERSION_MINOR     (2u)
 #define BTS_INTERFACE_VERSION_PATCH     (0u)
@@ -215,7 +215,7 @@ static inline void bts_pack_u64(uint8_t* p, uint64_t v) {
 }
 
 /*============================================================================
- * Unpack Helpers (for deserialization — CSII inbound and future receivers)
+ * Unpack Helpers (for deserialization - CSII inbound and future receivers)
  *============================================================================*/
 
 /* Little-endian unpacking (for payload) */

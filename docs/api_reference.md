@@ -26,7 +26,7 @@ The SDK talks to the sensor with SOME/IP over TCP and UDP:
 
 - **Config API** carries JSON bodies inside SOME/IP frames over TCP port 30500. Firmware image chunks are sent as raw binary bodies. Method IDs span `0x0010` to `0x00E1`. Requests and responses both carry the 20-byte E2E header.
 - **Data streams** (RDI, SHII, SPI) carry ISO 23150 binary payloads inside SOME/IP frames over TCP or UDP. `stream_transport` sets the default and `rdi_transport` / `shi_transport` / `spi_transport` override it per stream. Every stream payload carries a 20-byte E2E header, see [E2E Protection](#e2e-protection).
-- **CSII (vehicle input)** is the only Host to Radar stream. An interface v1.1.0 sensor accepts it on UDP 30501 only, a v1.0.x sensor on TCP 30501 only; see [Vehicle Input](#vehicle-input-csii-host--radar).
+- **CSII (vehicle input)** is the only Host to Radar stream. An interface v1.1.0 or later sensor accepts it on UDP 30501 only, a v1.0.x sensor on TCP 30501 only; see [Vehicle Input](#vehicle-input-csii-host--radar).
 - **SOME/IP headers** and **E2E headers** are big-endian. **ISO 23150 payloads** are little-endian.
 - UDP RDI frames (up to 8192 detections) use SOME/IP-TP when they exceed one datagram. TCP always carries one complete SOME/IP frame.
 - **Discovery** uses UDP port 30520 without an E2E header.
@@ -35,8 +35,9 @@ The SDK talks to the sensor with SOME/IP over TCP and UDP:
 
 | Stream | Direction | Event ID | E2E Data ID | Default Port |
 |--------|-----------|----------|-------------|--------------|
-| CSII (Vehicle Input) | Host → Radar | `0x8001` | `0x60008001` | 30501 (UDP on v1.1.0, TCP on v1.0.x) |
+| CSII (Vehicle Input) | Host → Radar | `0x8001` | `0x60008001` | 30501 (UDP on v1.1.0 and later, TCP on v1.0.x) |
 | RDI (Radar Detections) | Radar → Host | `0x8002` | `0x60008002` | 30509 |
+| RDI chunk k (interface v1.2.0, k = 0 to 75) | Radar → Host | `0x8100 + k` | `0x60008100 + k` | 30509 |
 | SHII (Sensor Health) | Radar → Host | `0x8003` | `0x60008003` | 30510 |
 | SPI (Sensor Performance) | Radar → Host | `0x8004` | `0x60008004` | 30511 |
 
@@ -50,13 +51,13 @@ Every RDI, SHII, SPI and CSII payload carries a 20-byte E2E header (big-endian) 
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
-| 0 | 4 | CRC high | `0x00000000` on interface v1.1.0 |
+| 0 | 4 | CRC high | `0x00000000` on interface v1.1.0 and later |
 | 4 | 4 | CRC | IEEE 802.3 CRC-32 (zlib, KAT `0xCBF43926`) over the body only |
 | 8 | 4 | Length | Protected body length (excludes the 20-byte header) |
 | 12 | 4 | Counter | Data streams: send slot number. Config API: response sequence |
 | 16 | 4 | Data ID | `0x6000 << 16` plus the Event ID (streams) or the Method ID (Config API) |
 
-Interface v1.0.x (firmware 3.0.0 to 3.1.0) keeps the field layout and puts a CRC-64/XZ (KAT `0x995DC9BBDF1939FA`) in bytes 0 to 7, computed over Length, Counter, Data ID and the body. A non-zero CRC high word selects that check on receive. The verdict reports the sender in `generation` (`kV1_1` when the high word is 0, `kV1_0` otherwise). Acceptance of the v1.0.x CRC is limited to this SDK release.
+Interface v1.0.x (firmware 3.0.0 to 3.1.0) keeps the field layout and puts a CRC-64/XZ (KAT `0x995DC9BBDF1939FA`) in bytes 0 to 7, computed over Length, Counter, Data ID and the body. A non-zero CRC high word selects that check on receive. The verdict reports the sender in `generation` (`kV1_0` when the high word is not 0; otherwise `kV1_1`, or `kV1_2` when the RDI header/chunk framing or the ISO23150 Header interface version marks interface v1.2.0). Acceptance of the v1.0.x CRC is limited to this SDK release.
 
 ### Receive disposition
 
@@ -200,7 +201,7 @@ int SendVehicleInput(const AfiVehicleInput& input);
 
 Sends one CSII message (Event `0x8001`) to `sensor_ip:csii_port` (default 30501). The frame is 115 bytes: 16 B SOME/IP, 20 B E2E, 79 B ISO payload.
 
-- Interface v1.1.0 receives CSII on UDP only and v1.0.x on TCP only. The SDK sends one UDP datagram, or the frame on a TCP connection, by `GetInterfaceGeneration()`. UDP is used while the generation is unknown. `csii_transport` (`"udp"` or `"tcp"`) overrides the choice.
+- Interface v1.1.0 and later receive CSII on UDP only, v1.0.x on TCP only. The SDK sends one UDP datagram, or the frame on a TCP connection, by `GetInterfaceGeneration()`. UDP is used while the generation is unknown. `csii_transport` (`"udp"` or `"tcp"`) overrides the choice.
 
 - Call cyclically, every **100 ms** recommended.
 - The SDK maintains the message and E2E counters and creates the socket on first use.
@@ -222,7 +223,7 @@ static std::vector<AfiSensorInfo> Discover(int timeout_ms = 3000, uint16_t port 
 - Broadcasts one request and collects responses for one window of `timeout_ms`.
 - Each sensor answers twice (unicast and limited broadcast, so that a host on the wrong subnet still sees it). The SDK keeps one response per (source IP, serial number).
 - `AfiSensorInfo::source_ip` is the address the response came from. `ip` is the address the sensor reports, or `source_ip` when the response omits it.
-- `AfiSensorInfo::generation` comes from the response keys: `driver_hash` exists only on interface v1.0.x and the `m72_*` keys only on v1.1.0.
+- `AfiSensorInfo::generation` comes from the response keys: `if_version` from interface v1.2.0 on; without it `driver_hash` exists only on v1.0.x and the `m72_*` keys only on v1.1.0.
 - `bind_ip` selects the local interface on multi-NIC hosts. Empty uses the OS default.
 - Discovery is UDP and a response can be lost. When a sensor is missing from one scan, scan again before concluding it is absent.
 - On Windows, an ICMP port-unreachable reported during the window does not end the scan.
@@ -457,7 +458,7 @@ The frame or message reference passed to a callback is valid only during the cal
 | `socket_buffer_size` | `uint32_t` | `16 MiB` | SO_RCVBUF for TCP and UDP receivers |
 | `connect_timeout_ms` | `int` | `5000` | TCP connect timeout (ms) |
 | `request_timeout_ms` | `int` | `5000` | Config API response timeout (ms) |
-| `csii_transport` | `string` | empty | CSII transport. Empty picks it from the interface generation (UDP on v1.1.0, TCP on v1.0.x, UDP while unknown); `"udp"` or `"tcp"` forces one |
+| `csii_transport` | `string` | empty | CSII transport. Empty picks it from the interface generation (UDP on v1.1.0 and later, TCP on v1.0.x, UDP while unknown); `"udp"` or `"tcp"` forces one |
 
 The stream ports and transports describe where the host receives. The sensor sends to the destinations stored by `SetNetworkConfig` / `SetStreamDestination`, which apply after `Restart()`.
 
@@ -476,7 +477,11 @@ The stream ports and transports describe where the host receives. The sensor sen
 | `e2e_counter` | `uint32_t` | E2E Counter (send slot) |
 | `e2e_checked` | `bool` | `validate_e2e` was on |
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
-| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header |
+| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header, the RDI framing and the ISO23150 Header interface version |
+| `chunk_count` | `uint16_t` | Interface v1.2.0 scan: chunk messages the header announces; `0` on a single-message scan |
+| `chunks_received` | `uint16_t` | Chunk messages that arrived |
+| `announced_detections` | `uint16_t` | Detections the header announces; `message.num_detections` is lower when chunks are missing |
+| `IsComplete()` | `bool` | `chunks_received == chunk_count` and `message.num_detections == announced_detections` |
 
 Call `RebindStorage()` after resizing or replacing `detections_storage` directly. A constructor taking `(message, recv_timestamp_ns, frame_seq, detections_storage)` binds the pointer on construction.
 
@@ -485,7 +490,7 @@ Call `RebindStorage()` after resizing or replacing `detections_storage` directly
 | Field | Type | Description |
 |-------|------|-------------|
 | `existence_probability` | `uint8_t` | Existence probability (%, 1 to 100 from interface v1.2.0) |
-| `detection_id` | `uint16_t` | Detection ID (`0xFFFF` if unused) |
+| `detection_id` | `uint16_t` | 0-based index in the scan on interface v1.2.0; `0xFFFF` if unused on earlier versions |
 | `object_id_reference` | `uint16_t` | Associated object ID (reserved) |
 | `timestamp_difference` | `float` | Time offset to the message timestamp (s) |
 | `radar_cross_section` | `float` | RCS (dBsm) |
@@ -513,7 +518,7 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 | `e2e_counter` | `uint32_t` | E2E Counter (send slot) |
 | `e2e_checked` | `bool` | `validate_e2e` was on |
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
-| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header |
+| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header and the ISO23150 Header interface version (`kV1_2` for an interface v1.2.0 payload) |
 
 ### `AfiWirePayloadFrame`
 
@@ -527,7 +532,9 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 | `e2e_checked` | `bool` | `validate_e2e` was on |
 | `e2e_valid` | `bool` | Length, Data ID and CRC checks passed |
 | `payload` | `vector<uint8_t>` | E2E header plus ISO payload, exactly as reassembled |
-| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header |
+| `generation` | `AfiInterfaceGeneration` | Sender's generation from the E2E header and the ISO23150 Header interface version (`kV1_2` for an interface v1.2.0 payload) |
+| `event_id` | `uint16_t` | SOME/IP Event ID of the message. Interface v1.2.0 delivers header A and header B (`0x8002`) and chunk k (`0x8100 + k`) as one payload each; a chunk carries its Chunk Header MessageCounter in `message_counter` and no sensor timestamp |
+| `someip_interface_version` | `uint8_t` | SOME/IP Interface Version of the message (`0x02` on interface v1.2.0 RDI messages) |
 
 ### `AfiInterfaceGeneration`
 
@@ -536,6 +543,7 @@ An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 det
 | `kUnknown` (0) | Not determined yet |
 | `kV1_0` (1) | Interface v1.0.x, firmware 3.0.0 to 3.1.0: data streams and CSII only |
 | `kV1_1` (2) | Interface v1.1.0, firmware 3.1.1 |
+| `kV1_2` (3) | Interface v1.2.x: `if_version` key, RDI header/chunk messages |
 
 ### `AfiRangeMode`
 
@@ -627,7 +635,8 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 | `uptime_seconds` | `uint32_t` | Sensor uptime in seconds (`scan_status.uptime_seconds`) |
 | `ptp_state` | `string` | `"INIT"` / `"SLAVE"` |
 | `ptp_offset_ns` | `int64_t` | PTP clock offset (ns) |
-| `generation` | `AfiInterfaceGeneration` | `kV1_0` when `driver_hash` is present, `kV1_1` when an `m72_*` key is present |
+| `if_version` | `string` | Interface version (`"1.2.0"`); empty before interface v1.2.0 |
+| `generation` | `AfiInterfaceGeneration` | From `if_version` when the key is present (interface v1.2.0 and later, `kV1_2`); otherwise `kV1_0` when `driver_hash` is present, `kV1_1` when an `m72_*` key is present |
 
 ### Config API Response Structs
 
@@ -652,6 +661,7 @@ FW v3.1.1 stores the received values; SOMC and the global timestamp do not chang
 | `software_version` | `string` | Unified software version |
 | `bootloader_hash` | `string` | Bootloader git short hash |
 | `fw_hash` | `string` | Firmware git short hash (running image) |
+| `if_version` | `string` | Interface version (`"1.2.0"`); empty before interface v1.2.0 |
 
 `software_version` and `fw_hash` describe the running image, so a firmware update shows its new values after the reboot. `bootloader_hash` changes when the bootloader update completes.
 
@@ -977,7 +987,7 @@ class AfiSdk:
 ```
 
 - `init()` connects the Config API and returns `OK` or `CONNECT_FAILED` (`INVALID_PARAM` for an unknown `csii_transport`). After a failed `init()`, call `reconnect()`.
-- `interface_generation` is `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1` or `INTERFACE_GEN_UNKNOWN` from the GetDeviceInfo request that opens each connection. On `INTERFACE_GEN_V1_0` every Config API call returns `NOT_SUPPORTED` without sending, and `connected` is `False`.
+- `interface_generation` is `INTERFACE_GEN_V1_0`, `INTERFACE_GEN_V1_1`, `INTERFACE_GEN_V1_2` or `INTERFACE_GEN_UNKNOWN` from the GetDeviceInfo request that opens each connection. On `INTERFACE_GEN_V1_0` every Config API call returns `NOT_SUPPORTED` without sending, and `connected` is `False`.
 - After a successful connect, any timeout, lost connection or mismatched response drops the socket and the next request reconnects. Request bodies above 16,384 bytes are refused before sending (`INVALID_PARAM`).
 - `reconnect()` retries the connect every `interval_s` until `timeout_s` and returns `OK`, `NOT_INITIALIZED` or `CONNECT_FAILED`. Use it after `restart()` or `firmware_update_reboot()`.
 - `close()` closes the Config API and CSII sockets. Later Config API calls return `NOT_INITIALIZED`.
@@ -1004,7 +1014,7 @@ GET methods return `Optional[dict]` (`None` on error). SET and command methods r
 |--------|---------|
 | `send_vehicle_input(somc=SOMC_NORMAL_MODE, velocity_mps=(x, y, z), rotation_rate_rps=(yaw, pitch, roll), wheel_speeds_rps=(fl, fr, rl, rr), steering_angle_rad=0.0, gear_position=GEAR_NEUTRAL, global_timestamp_utc=0.0, coord_system=0, sensor_id=1, timestamp_ns=0)` | `int` |
 
-Sends one CSII message to `csii_port` (Event `0x8001`): one UDP datagram on interface v1.1.0, one message on a TCP connection on v1.0.x (`csii_transport` overrides). Call cyclically (100 ms recommended). The socket is created on first use and the SDK maintains the message and E2E counters. Returns `NOT_INITIALIZED` before `init()` and `DISCONNECTED` on a socket error. SOMC and gear constants live in `afi_sdk.streams`.
+Sends one CSII message to `csii_port` (Event `0x8001`): one UDP datagram on interface v1.1.0 and later, one message on a TCP connection on v1.0.x (`csii_transport` overrides). Call cyclically (100 ms recommended). The socket is created on first use and the SDK maintains the message and E2E counters. Returns `NOT_INITIALIZED` before `init()` and `DISCONNECTED` on a socket error. SOMC and gear constants live in `afi_sdk.streams`.
 
 #### Access Mode (0x00Ex)
 
@@ -1128,12 +1138,13 @@ from afi_sdk import AfiSdk, AfiSdkConfig, firmware
 
 sdk = AfiSdk()
 sdk.init(AfiSdkConfig(sensor_ip="192.168.10.150"))
-uptime = firmware.radar_uptime("192.168.10.150")
+uptime = firmware.radar_uptime("192.168.10.150")   # None when Discovery does not answer
 
 result = firmware.update(sdk, firmware={"m7_0": m70, "m7_1": m71, "m7_2": m72, "a53": a53},
                          bootloader=None, reboot=True)
 if result.ok and result.rebooted:
-    firmware.wait_for_restart("192.168.10.150", uptime)
+    if uptime is not None:
+        firmware.wait_for_restart("192.168.10.150", uptime)
     sdk.reconnect()
     problems = firmware.verify(sdk, result.target_face, fw_hash="1a2b3c4d")
 ```
@@ -1173,15 +1184,17 @@ Chunks use the `max_chunk_size` from the start answer (4096 when absent) and res
 
 ```python
 from afi_sdk.streams import (
-    E2E_DATA_ID_RDI,
-    strip_e2e,
+    RdiStreamDecoder,
     parse_rdi_frame,
     parse_rdi_detection,
 )
 
-e2e, iso = strip_e2e(someip_payload, expected_data_id=E2E_DATA_ID_RDI)
-if e2e and e2e["ok"]:
-    header = parse_rdi_frame(iso)        # 36B RDI header
+decoder = RdiStreamDecoder()
+for scan in decoder.feed(someip_message):    # one complete SOME/IP message in, closed scans out
+    if not scan["e2e_valid"]:
+        continue
+    iso = scan["payload"]
+    header = parse_rdi_frame(iso)            # 36B RDI header
     for i in range(header["num_detections"]):
         det = parse_rdi_detection(iso, header["det_start"], i)  # 51B each
 ```
@@ -1195,6 +1208,7 @@ if e2e and e2e["ok"]:
 | `strip_e2e(frame, validate=True, expected_data_id=None)` | Returns `(e2e, body)`. `e2e` adds `length_ok`, `data_id_ok`, `crc_zero`, `crc_ok` (with `validate`; CRC-64/XZ when the high word is not 0), `ok` and `generation` (`INTERFACE_GEN_*`). A failed check logs a warning and keeps the body |
 | `build_e2e_header(data_id, counter, payload)` | Builds a 20B E2E header with the computed CRC |
 | `SomeipTpReassembler(max_payload_size, max_sessions=8, max_segment_size=1392)` | Bounded, session-aware UDP SOME/IP-TP reassembly. `feed(tp_header, payload, session_id)` returns the complete payload or `b""`; `reset(session_id=None)` discards state |
+| `RdiStreamDecoder(validate=True)` | RDI decoder for every interface generation. `feed(frame)` takes one complete SOME/IP message and returns the scans it closed: a single-message scan (v1.0.x, v1.1.0) per message, or one scan assembled from the interface v1.2.0 header and chunk messages. Each scan is a dict with `payload` (single-message RDI payload for `parse_rdi_frame`), `e2e_counter`, `e2e_valid`, `chunk_count`, `chunks_received`, `announced_detections`, `complete` and `generation`. `poll()` closes a scan whose header B did not arrive |
 | `parse_rdi_frame(payload)` | Parses the 36B RDI header (ISO23150 Header fields, `radial_velocity_begin/end`, `detections_capability`, `num_detections`, `det_start`). `None` when the length does not match the count |
 | `parse_rdi_detection(payload, det_start, index)` | Parses one 51B detection |
 | `parse_shi(payload)` | Parses a SHII payload: the whole ISO23150 Header (including `data_qualifier`) and the health fields |
@@ -1231,7 +1245,7 @@ with ConfigClient("192.168.10.150") as client:
 | `connected` | `True` while a socket is open |
 | `interface_generation` | `INTERFACE_GEN_*` from the last probe. On `INTERFACE_GEN_V1_0`, `request()` and `request_raw()` return `(RC_NOT_SUPPORTED, None)` without sending until `connect()` |
 
-Transport results: `ERR_TRANSPORT` (-1), `ERR_TIMEOUT` (-2), `ERR_PROTOCOL` (-3), `ERR_TOO_LARGE` (-4, body above `MAX_REQUEST_BODY` = 16,384, nothing sent). `afi_sdk.someip` also exports the Config API method IDs `METHOD_*` (`0x0010` to `0x00E1`), `RC_*` and `RETURN_CODE_NAMES`, `ACCESS_MODE_*`, `RANGE_MODE_*` and `RANGE_MODE_NAMES`, the `EVENT_*` and `DEFAULT_*_PORT` constants, `INTERFACE_GEN_UNKNOWN` / `_V1_0` / `_V1_1`, `discovery_generation(info)`, and `discover(timeout_s=3.0, broadcast_ip="255.255.255.255", port=30520, bind_ip="")`.
+Transport results: `ERR_TRANSPORT` (-1), `ERR_TIMEOUT` (-2), `ERR_PROTOCOL` (-3), `ERR_TOO_LARGE` (-4, body above `MAX_REQUEST_BODY` = 16,384, nothing sent). `afi_sdk.someip` also exports the Config API method IDs `METHOD_*` (`0x0010` to `0x00E1`), `RC_*` and `RETURN_CODE_NAMES`, `ACCESS_MODE_*`, `RANGE_MODE_*` and `RANGE_MODE_NAMES`, the `EVENT_*` and `DEFAULT_*_PORT` constants, `INTERFACE_GEN_UNKNOWN` / `_V1_0` / `_V1_1` / `_V1_2`, `generation_from_if_version(if_version)`, `discovery_generation(info)`, and `discover(timeout_s=3.0, broadcast_ip="255.255.255.255", port=30520, bind_ip="")`.
 
 ---
 

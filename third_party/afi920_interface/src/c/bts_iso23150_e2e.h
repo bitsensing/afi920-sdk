@@ -5,8 +5,7 @@
  * Authoritative spec: Interface Overview section 3.2 (docs/00_Interface_Overview.md)
  *
  * Scope: RDI / SHII / SPI / CSII / Config API.
- * Excluded: Discovery (UDP 30520) and System Log (UDP, no SOME/IP
- * framing, so there is no place to carry the header).
+ * Excluded: Discovery (UDP 30520), which carries no E2E header.
  *
  * The 20B header sits between the SOME/IP header and the body. All fields are
  * Big-endian, unlike the LE ISO23150 payload. The field layout is based on AUTOSAR

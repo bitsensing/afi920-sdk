@@ -113,7 +113,6 @@ _e2e_failures: Dict[int, int] = {}
 
 def strip_e2e(frame: bytes, validate: bool = True,
               expected_data_id: Optional[int] = None,
-              allow_zero_crc: bool = False
               ) -> Tuple[Optional[dict], bytes]:
     """Strip and verify the E2E header of a payload.
 
@@ -125,9 +124,6 @@ def strip_e2e(frame: bytes, validate: bool = True,
         validate: recompute the CRC (CRC-32 over the body; CRC-64/XZ over
             Length, Counter, Data ID and the body when the high word is not 0)
         expected_data_id: channel Data ID, or None to skip the identity check
-        allow_zero_crc: accept a zero CRC field on the Data ID and Length
-            checks alone (an exception to Interface Overview §3.2.5 for a
-            stream whose sender may leave the CRC out)
 
     Returns:
         (e2e_dict, body). The dictionary carries ``length_ok``,
@@ -145,16 +141,13 @@ def strip_e2e(frame: bytes, validate: bool = True,
     e2e["data_id_ok"] = (
         expected_data_id is None or e2e["data_id"] == expected_data_id
     )
-    # Interface Overview §3.2.5: a zero CRC field never counts as a pass, except under
-    # the allow_zero_crc exception, which passes on the Data ID and Length.
+    # Interface Overview §3.2.5: a zero CRC field never counts as a pass.
     e2e["crc_zero"] = (e2e["crc_high"] == 0 and e2e["crc"] == 0)
     e2e["generation"] = (INTERFACE_GEN_V1_1 if e2e["crc_high"] == 0
                          else INTERFACE_GEN_V1_0)
     ok = e2e["length_ok"] and e2e["data_id_ok"]
     if validate:
-        if e2e["crc_zero"] and allow_zero_crc:
-            e2e["crc_ok"] = True
-        elif e2e["crc_high"] == 0:
+        if e2e["crc_high"] == 0:
             e2e["crc_ok"] = (not e2e["crc_zero"]
                              and crc32_ieee(body) == e2e["crc"])
         else:

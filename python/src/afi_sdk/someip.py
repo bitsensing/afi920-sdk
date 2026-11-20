@@ -123,7 +123,6 @@ DEFAULT_CSII_PORT      = 30501
 DEFAULT_RDI_PORT       = 30509
 DEFAULT_SHII_PORT      = 30510
 DEFAULT_SPI_PORT       = 30511
-DEFAULT_SYSLOG_PORT    = 30515
 DEFAULT_DISCOVERY_PORT = 30520
 
 # Safety limit for response payload size (matches C++ kMaxResponsePayload)

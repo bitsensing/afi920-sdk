@@ -34,7 +34,7 @@ struct AfiSdkConfig {
     /// Port for SPI (Sensor Performance Interface)
     uint16_t spi_port = 30511;
 
-    /// Port for CSII vehicle input (Host → Radar; UDP on v1.1.0, TCP on v1.0.x)
+    /// Port for CSII vehicle input (Host -> Radar; UDP on v1.1.0, TCP on v1.0.x)
     uint16_t csii_port = 30501;
 
     /// Default data stream transport protocol ("tcp" or "udp", default is TCP)
@@ -69,7 +69,7 @@ struct AfiSdkConfig {
     /// Config API request timeout in milliseconds
     int request_timeout_ms = 5000;
 
-    // v1.0.2 additions are appended to preserve the order and offsets of the
+    // Later additions are appended to preserve the order and offsets of the
     // original public members for existing aggregate-style callers.
 
 

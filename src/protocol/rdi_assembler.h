@@ -4,7 +4,7 @@
  *
  * One scan is header A (Event 0x8002), chunk k (Event 0x8100 + k) for
  * k = 0..K-1 and header B (Event 0x8002 again), all under one E2E Counter.
- * The assembler follows Interface Overview §3.2.3:
+ * The assembler follows Interface Overview section 3.2.3:
  *   - A message whose E2E Counter equals one of the last two closed scans is
  *     late and is dropped without opening or closing a scan.
  *   - A message with another E2E Counter closes the open scan and opens one.
@@ -67,7 +67,7 @@ private:
         std::vector<uint8_t> body;
     };
 
-    // §3.2.3 rules (1) to (3); false when the message is late.
+    // section 3.2.3 rules (1) to (3); false when the message is late.
     bool Admit(uint32_t e2e_counter, uint64_t now_ns, const Emit& emit);
     bool IsComplete() const;
     void Close(const Emit& emit);
