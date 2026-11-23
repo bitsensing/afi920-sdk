@@ -217,7 +217,7 @@ cmake --build .
 | Platform | Output File | Path |
 |----------|-------------|------|
 | Linux | `libafi_sdk.a` | `build/src/libafi_sdk.a` |
-| Windows | `afi_sdk.lib` | `build/src/afi_sdk.lib` |
+| Windows | `afi_sdk.lib` | `build/src/Release/afi_sdk.lib` (Visual Studio generator), `build/src/afi_sdk.lib` (NMake, Ninja) |
 
 ### CMake Integration
 
@@ -277,6 +277,7 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 | 30500 | TCP | Host ↔ Sensor | (none) | Config API (SOME/IP + JSON/raw chunk, Method IDs `0x0010`–`0x00E1`) |
 | 30501 | UDP (v1.1.0 and later), TCP (v1.0.x) | Host → Sensor | `0x8001` | CSII (Vehicle Input) |
 | 30509 | TCP/UDP | Sensor → Host | `0x8002` | RDI (Radar Detections / Point Cloud) |
+| 30509 | TCP/UDP | Sensor → Host | `0x8100`–`0x814B` | RDI chunk k = 0 to 75 (interface v1.2.0) |
 | 30510 | TCP/UDP | Sensor → Host | `0x8003` | SHII (Sensor Health Information) |
 | 30511 | TCP/UDP | Sensor → Host | `0x8004` | SPI (Sensor Performance Information) |
 | 30520 | UDP | Host ↔ Sensor | (none) | Discovery (Broadcast) |
@@ -428,9 +429,9 @@ Source code: [examples/cpp/](examples/cpp/)
 | Program | Description |
 |---------|-------------|
 | `sample_discovery.py` | Discover sensors on the network |
-| `sample_pointcloud.py` | Receive RDI point cloud data |
+| `sample_pointcloud.py` | Receive RDI point cloud data. When the sensor's stored detection protocol differs from the transport argument (default `tcp`), it stores the argument (Diagnostic mode, NVM) and restarts the sensor |
 | `sample_data_stream.py` | Receive RDI/SHII/SPI data simultaneously |
-| `sample_config.py` | Read sensor configuration and write values back |
+| `sample_config.py` | Read sensor configuration; with `--write` also write the values back |
 | `sample_multi_sensor.py` | Configure data ports on multiple sensors |
 | `set_yaw_90.py` | Write the mounting yaw and restart to apply |
 
@@ -540,7 +541,7 @@ Wire-format data is represented via ISO 23150 C structures under `third_party/af
 | `object_id_reference` | `uint16_t` | Associated object ID (reserved) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | Measurement errors (range/azimuth/elevation/velocity) |
 
-The protocol allows up to **8192 detections per frame** (36-byte header + 51 bytes per detection); firmware v3.1.1 and v3.1.2 send at most 2048. UDP large frames are segmented with SOME/IP-TP and reassembled automatically; TCP carries one complete SOME/IP frame.
+Interface v1.2.0 (firmware v3.1.2) sends one scan as a header message and chunk messages of up to 27 detections, each message in one datagram, at most 2048 detections per scan. Interface v1.1.0 and v1.0.x send one message per scan (36-byte header + 51 bytes per detection) of up to **8192 detections**; firmware v3.1.1 sends at most 2048. Over UDP such a message is segmented with SOME/IP-TP and reassembled automatically. TCP carries one complete SOME/IP frame.
 
 > **Important:** A callback's frame reference is valid only during the callback. Copying the whole `AfiRdiFrame` is safe: the copy owns its vector and rebinds the C payload pointer. If you directly resize or replace the public storage vector, call `RebindStorage()` afterward.
 
@@ -567,7 +568,7 @@ AfiSdk
 - TCP data streams reconnect after a connection drop, with a backoff from 1 s up to 30 s.
 - `SendVehicleInput()` runs on the caller's thread and creates the CSII socket on first use: UDP for interface v1.1.0 and later, TCP for v1.0.x.
 - Each Config API connection opens with a read-only GetDeviceInfo request that decides the interface generation; on v1.0.x the connection closes and Config API calls return `kNotSupported` without sending.
-- The Config API client sends one request at a time and verifies that each response echoes the request (message, client, and session ID, protocol version `0x01`, RESPONSE type). A timeout, a mismatched response, or a lost connection drops the socket, and the next call reconnects to the same endpoint. `request_timeout_ms` bounds each request, and a request body above 16,384 bytes returns `kInvalidParam` without being sent.
+- The Config API client sends one request at a time and verifies that each response echoes the request (message, client, and session ID, protocol and interface version `0x01`, RESPONSE `0x80` or ERROR `0x81` type). A timeout, a mismatched response, or a lost connection drops the socket, and the next call reconnects to the same endpoint. `request_timeout_ms` bounds each request, and a request body above 16,384 bytes returns `kInvalidParam` without being sent.
 - A failed Config API connect during `Init()` does not fail `Init()`; the endpoint is kept and the next Config API call connects. `Init()` can be called again after `Stop()`.
 
 ---
@@ -582,7 +583,7 @@ AfiSdk
 | A SET succeeded but the behavior did not change | Settings take effect after a restart | Call `Restart()`, then `ReconnectConfigApi()` |
 | Data streams stopped after entering the programming mode | The programming mode halts RDI/SHII/SPI | Restart the radar |
 | Config API calls return `kTimeout` or `kDisconnected` | No response within `request_timeout_ms`, the connection dropped, or another client holds the radar's single Config API connection | The next call reconnects; close other Config API clients |
-| `kBusy` | More than 200 requests per second | Lower the request rate |
+| `kBusy` | More than 200 requests per second, a `GetFaultLog` flash job, or a stored-setting write within 3 s of boot | Lower the request rate, or retry |
 | Config API works but no data is received | Stream destination or transport mismatch, or UDP datagrams arrive from an address other than `sensor_ip` | Check destination IP/ports/protocols with `GetNetworkConfig` and match `AfiSdkConfig` |
 | A sensor is missing from Discovery | A UDP response was lost, or the broadcast left through another NIC | Run Discovery again; pass `bind_ip` |
 | E2E CRC mismatch warnings in the log | Corrupted frames | Check `e2e_valid` per frame; set `e2e_strict = true` to drop failing frames |

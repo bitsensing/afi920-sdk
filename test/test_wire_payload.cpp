@@ -155,8 +155,9 @@ static bool send_tp_payload(uint16_t port, uint16_t event_id,
             break;
         }
         // Keep large future-schema tests deterministic even when the host caps
-        // SO_RCVBUF below the SDK's requested value.
-        if (((offset / kSomeipTpChunkSize) & 31u) == 31u) {
+        // SO_RCVBUF below the SDK's requested value: pause after every 8
+        // segments (about 11 KB) so a loopback burst cannot overrun it.
+        if (((offset / kSomeipTpChunkSize) & 7u) == 7u) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -261,7 +262,7 @@ TEST(tp_reassembly_preserves_rdi_payload) {
     CHECK(sdk.Init(config) == kOk);
     CHECK(sdk.Start() == kOk);
     CHECK(send_tp_payload(config.rdi_port, kEventRdi, 71, rdi_payload));
-    for (int i = 0; i < 200 && !received.load(); ++i) {
+    for (int i = 0; i < 500 && !received.load(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     CHECK(sdk.Stop() == kOk);

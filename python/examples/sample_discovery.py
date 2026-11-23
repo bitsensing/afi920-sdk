@@ -13,6 +13,8 @@ Usage:
 Copyright 2026 bitsensing Inc. All rights reserved.
 """
 
+from __future__ import annotations
+
 import socket
 import struct
 import sys

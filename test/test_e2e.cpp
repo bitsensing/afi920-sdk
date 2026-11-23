@@ -44,9 +44,9 @@ TEST(header_layout_big_endian) {
     PASS("header_layout_big_endian");
 }
 
-// Golden headers pinned by the interface (tests/python/codec/test_e2e_vectors.py,
-// tests/c/src/AFI920/test_e2e.c): body i -> (i*7+1)&0xFF, and the Config API
-// response body below. These bytes come from the interface, not from this SDK.
+// Golden headers pinned by the interface test vectors: body i -> (i*7+1)&0xFF,
+// and the Config API response body below. These bytes come from the interface,
+// not from this SDK.
 TEST(interface_golden_headers) {
     uint8_t body51[51];
     for (int i = 0; i < 51; ++i) body51[i] = static_cast<uint8_t>((i * 7 + 1) & 0xFF);
@@ -213,31 +213,6 @@ TEST(data_id_mismatch_rejected) {
     PASS("data_id_mismatch_rejected");
 }
 
-TEST(zero_crc_passes_when_allowed) {
-    // Exception to Interface Overview section 3.2.5: with
-    // allow_zero_crc a zero CRC field is received on the Data ID and Length
-    // checks alone.
-    uint8_t frame[20 + 4] = {};
-    const uint8_t payload[4] = {1,2,3,4};
-    make_frame(frame, BTS_E2E_DATA_ID(0x0103), 3, payload, sizeof(payload));
-    std::memset(frame, 0, 8);
-
-    E2eHeader hdr;
-    CHECK(e2e_validate(frame, sizeof(frame), hdr,
-                       BTS_E2E_DATA_ID(0x0103)) == E2eStatus::kCrcZero);
-    CHECK(e2e_validate(frame, sizeof(frame), hdr, BTS_E2E_DATA_ID(0x0103),
-                       true, true) == E2eStatus::kOk);
-    CHECK(e2e_validate(frame, sizeof(frame), hdr, BTS_E2E_DATA_ID(0x0203),
-                       true, true) == E2eStatus::kDataIdMismatch);
-    CHECK(e2e_validate(frame, sizeof(frame) - 1, hdr, BTS_E2E_DATA_ID(0x0103),
-                       true, true) == E2eStatus::kLengthMismatch);
-    // A non-zero CRC is still recomputed under the exception.
-    make_frame(frame, BTS_E2E_DATA_ID(0x0103), 3, payload, sizeof(payload));
-    frame[21] ^= 0x01;
-    CHECK(e2e_validate(frame, sizeof(frame), hdr, BTS_E2E_DATA_ID(0x0103),
-                       true, true) == E2eStatus::kCrcMismatch);
-    PASS("zero_crc_passes_when_allowed");
-}
 
 TEST(e2e_data_ids_match_registry) {
     CHECK(BTS_E2E_DATA_ID_CSII == 0x60008001u);

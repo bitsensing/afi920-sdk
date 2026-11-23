@@ -75,7 +75,8 @@ afi920-sdk/
 │   ├── afi_sdk.h                  ← AfiSdk class: lifecycle, callbacks, CSII, Discovery, Config API
 │   ├── afi_types.h                ← stream and Config API data types
 │   ├── afi_config.h               ← AfiSdkConfig
-│   └── afi_error.h                ← AfiError, AfiReturnCode, AfiErrorStr()
+│   ├── afi_error.h                ← AfiError, AfiReturnCode, AfiErrorStr()
+│   └── afi_compat.h               ← deprecated v2.1.0 SHII/SPI names (AFI_NO_COMPAT_NAMES omits them)
 ├── src/                           ← C++ implementation (static library target afi_sdk)
 ├── examples/cpp/                  ← sample_discovery, sample_pointcloud, sample_data_stream,
 │                                    sample_config, sample_multi_sensor, restart_sensor,
@@ -102,7 +103,7 @@ afi920-sdk/
 | 예제 | 내용 |
 |------|------|
 | `sample_discovery` / `.py` | 네트워크 센서 탐색 |
-| `sample_pointcloud` / `.py` | RDI 포인트 클라우드 수신 |
+| `sample_pointcloud` / `.py` | RDI 포인트 클라우드 수신. Python 버전은 센서에 저장된 detection protocol이 전송 방식 인자와 다르면 인자 값을 저장하고 센서를 재시작한다 |
 | `sample_data_stream` / `.py` | RDI, SHII, SPI 동시 수신 |
 | `sample_config` / `.py` | 전체 설정 범주 조회(`.py --write`는 동일 값 재기록 포함) |
 | `sample_multi_sensor` / `.py` | C++는 최대 4개 센서 수신, Python은 센서별 데이터 포트 기록과 센서 재시작 |
@@ -273,7 +274,7 @@ cfg.enable_spi = true;
 
 afi::AfiSdk sdk;
 
-// RDI: point cloud (FW v3.1.1 and v3.1.2 send at most 2048 detections per frame; the protocol allows 8192)
+// RDI: point cloud (FW v3.1.1 and v3.1.2 send at most 2048 detections per scan; 8192 is the single-message limit of interface v1.1.0 and v1.0.x)
 sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
     /* f.message.detections[0 .. f.message.num_detections-1], f.e2e_valid, f.generation */
 });
@@ -747,7 +748,7 @@ elif result.rebooted:
 sdk.close()
 ```
 
-`update()`는 Diagnostic을 거쳐 프로그래밍 모드에 진입하고, 부트로더 이미지가 있으면 먼저 업로드한다. 이어서 `m7_0`, `m7_1`, `m7_2`, `a53`을 비활성 슬롯에 업로드하며 컴포넌트마다 `target_slot`을 확인한다. 모든 커밋이 idle에 도달하면 슬롯을 한 번 전환하고 Boot-Info로 결과를 확인하며, `reboot=True`이면 세션이 idle인 상태에서 `FirmwareUpdateReboot`를 송신한다. 첫 실패에서 절차를 중단한다. 4종 컴포넌트를 정확히 담지 않은 `firmware` dict는 아무것도 송신하지 않고 거부한다.
+`update()`는 Diagnostic을 거쳐 프로그래밍 모드에 진입하고, 부트로더 이미지가 있으면 먼저 업로드한다. 이어서 `m7_0`, `m7_1`, `m7_2`, `a53`을 비활성 슬롯에 업로드하며 컴포넌트마다 `target_slot`을 확인한다. 모든 커밋이 idle에 도달하면 슬롯을 한 번 전환하고(기록한 면이 이미 활성 면이면 전환하지 않는다) Boot-Info로 결과를 확인하며, `reboot=True`이면 세션이 idle인 상태에서 `FirmwareUpdateReboot`를 송신한다. 첫 실패에서 절차를 중단한다. 4종 컴포넌트를 정확히 담지 않은 `firmware` dict는 아무것도 송신하지 않고 거부한다.
 
 | 함수 / 타입 | 설명 |
 |-------------|------|
@@ -1009,7 +1010,7 @@ Python `AfiSdkConfig` 데이터클래스는 `sensor_ip`, `config_port`, `csii_po
 | `announced_detections` | `uint16_t` | 헤더가 알린 detection 수이며, chunk가 누락되면 `message.num_detections`가 이 값보다 작다 |
 | `IsComplete()` | `bool` | `chunks_received == chunk_count`이고 `message.num_detections == announced_detections`인지 여부 |
 
-`message`는 ISO23150 Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성되며 최대 8192개 detection을 담는다. FW v3.1.1과 v3.1.2는 최대 2048개를 송신한다.
+`message`는 ISO23150 Header(`interface_version`, `sensor_id`, ns 단위 `timestamp`, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections`, `detections`를 담는다. RDI payload는 36바이트 헤더와 detection당 51바이트로 구성된다. 인터페이스 v1.1.0과 v1.0.x의 단일 메시지 형식은 최대 8192개 detection을, 인터페이스 v1.2.0은 스캔당 최대 2048개를 담으며, FW v3.1.1과 v3.1.2는 최대 2048개를 송신한다.
 
 ### Detection 필드 (`bts_rdi_detection_t`, 51바이트)
 
@@ -1057,7 +1058,8 @@ Config API 회전값(`AfiRotation`, `get_rotation()`)의 단위는 도(degree)�
 |------|:---:|:---:|------|
 | `stream` | | ✓ | `AfiStreamKind::kDetection`, `kHealth`, `kPerformance` |
 | `recv_timestamp_ns` | ✓ | ✓ | 호스트 수신 시각(steady clock) |
-| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO23150 Header의 timestamp와 MessageCounter |
+| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO23150 Header의 timestamp와 MessageCounter. 인터페이스 v1.2.0 RDI chunk는 Chunk Header MessageCounter를 담으며 센서 timestamp가 없다 |
+| `event_id`, `someip_interface_version` | | ✓ | SOME/IP Event ID와 Interface Version. RDI 헤더 A와 B는 `0x8002`, chunk k는 `0x8100 + k`(Interface Version 0x02)이다 |
 | `e2e_counter`, `e2e_checked`, `e2e_valid` | ✓ | ✓ | E2E Counter와 판정 결과 |
 | `payload` | | ✓ | 재조립된 그대로의 E2E 헤더와 ISO payload |
 | `generation` | ✓ | ✓ | 송신 측 세대 |
@@ -1123,11 +1125,12 @@ C++ 코드는 `afi_error.h`의 `afi::AfiError` enum이다. Python 상수는 같�
 | 30500 | TCP | ↔ | | `0x6000 << 16 \| Method ID` | Config API(SOME/IP + JSON, 펌웨어 조각은 raw binary), Method ID `0x0010`~`0x00E1` |
 | 30501 | UDP (v1.1.0 이후), TCP (v1.0.x) | → | `0x8001` | `0x60008001` | CSII 차량 입력 |
 | 30509 | TCP/UDP | ← | `0x8002` | `0x60008002` | RDI 포인트 클라우드 |
+| 30509 | TCP/UDP | ← | `0x8100 + k` | `0x60008100 + k` | RDI chunk k = 0~75 (인터페이스 v1.2.0) |
 | 30510 | TCP/UDP | ← | `0x8003` | `0x60008003` | SHII 상태 정보 |
 | 30511 | TCP/UDP | ← | `0x8004` | `0x60008004` | SPI 성능 정보 |
 | 30520 | UDP 브로드캐스트 | ↔ | | (미적용) | Discovery |
 
-TCP(기본값)에서는 호스트가 센서의 스트림 포트로 접속하고, UDP에서는 호스트가 스트림 포트를 bind한다. SOME/IP Service ID는 `0x6000`이다. 레이더는 100 ms 송신 주기마다 RDI, SHII, SPI 메시지를 하나씩 송신한다.
+TCP(기본값)에서는 호스트가 센서의 스트림 포트로 접속하고, UDP에서는 호스트가 스트림 포트를 bind한다. SOME/IP Service ID는 `0x6000`이다. 레이더는 100 ms 송신 주기마다 SHII와 SPI 메시지를 하나씩, RDI 스캔을 하나 송신한다. RDI 스캔은 인터페이스 v1.1.0과 v1.0.x에서 메시지 하나이고, 인터페이스 v1.2.0에서 헤더 A, chunk 메시지, 헤더 B이다.
 
 **프로토콜 스택 (데이터 스트림)**
 
@@ -1170,7 +1173,7 @@ TCP에서는 각 센서가 기본 포트를 그대로 사용하므로 오프셋�
 |------|-----------|
 | `ping` 실패 | 호스트 IP의 `192.168.10.x` 대역 여부, 케이블, NIC, 방화벽을 확인한다 |
 | `Init()`이 `kConnectFailed` 반환 | TCP 스트림 연결 또는 UDP 포트 bind가 실패했다. `sensor_ip`, 케이블, 서브넷, 같은 포트를 쓰는 다른 프로세스를 확인한다 |
-| `Init()`이 `kInvalidParam` 반환 | `"tcp"`, `"udp"` 이외의 전송 문자열을 지정했다(`csii_transport`는 빈 값도 허용한다) |
+| `Init()`이 `kInvalidParam` 반환 | 활성 스트림 또는 `csii_transport`에 `"tcp"`, `"udp"` 이외의 전송 문자열을 지정했다(`csii_transport`는 빈 값도 허용한다) |
 | `Start()`는 성공하지만 callback이 호출되지 않는다 | `GetNetworkConfig`의 목적지 IP, 포트, 프로토콜이 `AfiSdkConfig`와 일치해야 한다. UDP에서는 `sensor_ip` 이외의 주소에서 온 datagram을 버린다. unicast 목적지 IP는 TCP 스트림 클라이언트도 그 IP로 제한한다 |
 | callback은 호출되나 `num_detections == 0` | 시야 내 물체 존재 여부와 범위 모드(`GetRangeMode`)를 확인한다. DataQualifier `1`은 사용하지 않아야 하는 내용을 뜻한다 |
 | SET이 `kSessionRequired` 반환 | SET 전에 `EnterMode(kDiagnostic)`를 호출한다 |

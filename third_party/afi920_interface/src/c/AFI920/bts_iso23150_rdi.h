@@ -19,18 +19,17 @@ extern "C" {
  *   RadialVelocity begin/end) + Detection List Info (4B, capability + count).
  * Detection Entity (51B) = Status (9) + Information (10) + Position (24)
  *   + Dynamics (8).
- * Authoritative spec: docs/01_RDI_Radar_Detections.md
+ * Authoritative spec: RDI specification
  *============================================================================*/
 
 #define BTS_RDI_HEADER_SIZE             (36u)
 #define BTS_RDI_DETECTION_SIZE          (51u)
-/* Detections the radar sends per scan (C# RdiMaxDetections, Python
- * RDI_MAX_DETECTIONS). */
+/* Detections the radar sends per interface v1.2.0 scan. */
 #define BTS_RDI_MAX_DETECTIONS          (2048u)
 /* RecognisedDetectionsCapability default set by bts_rdi_init. */
 #define BTS_RDI_DETECTION_CAPABILITY    BTS_RDI_MAX_DETECTIONS
 /* Protocol limit of the Interface Version 0x01 legacy single-message format
- * (C# RdiLegacyMaxDetections). bts_rdi_set_detections and bts_rdi_serialize
+ * bts_rdi_set_detections and bts_rdi_serialize
  * build that format, so they clamp to this limit. */
 #define BTS_RDI_LEGACY_MAX_DETECTIONS   (8192u)
 #define BTS_RDI_MAX_PAYLOAD_SIZE        (BTS_RDI_HEADER_SIZE + BTS_RDI_DETECTION_SIZE * BTS_RDI_LEGACY_MAX_DETECTIONS)
@@ -49,7 +48,7 @@ extern "C" {
  * EntitiesPerChunk is fixed at 27: a full chunk is 16 + 20 + 8 + 27 x 51 =
  * 1,421B of UDP payload, 51B under the 1,472B limit, which also leaves room
  * for the 12B SecOC trailer. 2048 detections fill 76 chunks (last one 23).
- * Spec: docs/01_RDI_Radar_Detections.md section 2.
+ * Spec: RDI specification section 2.
  *============================================================================*/
 
 #define BTS_RDI_LIST_LAYOUT_SIZE        (4u)

@@ -2,7 +2,7 @@
  * @file sample_data_stream.cpp
  * @brief Sample: Receive RDI/SHII/SPI data streams from AFI920 sensor
  *
- * Demonstrates simultaneous reception of all four data stream types:
+ * Demonstrates simultaneous reception of the three data stream types:
  *   - RDI (Radar Detection Interface) - point cloud detections
  *   - SHII (Sensor Health Information) - sensor health status
  *   - SPI (Sensor Performance Interface) - FOV, object types, reference targets

@@ -117,7 +117,7 @@ return the whole ISO23150 Header, including `data_qualifier`. See
 | File | Description |
 |------|-------------|
 | `examples/sample_discovery.py` | Discover sensors on the network via UDP broadcast |
-| `examples/sample_pointcloud.py` | Receive RDI point cloud data with detection details |
+| `examples/sample_pointcloud.py` | Receive RDI point cloud data with detection details. When the sensor's stored detection protocol differs from the transport argument (default `tcp`), it stores the argument (Diagnostic mode, NVM) and restarts the sensor |
 | `examples/sample_data_stream.py` | Receive RDI/SHII/SPI data streams simultaneously |
 | `examples/sample_config.py` | Read all sensor configuration categories and write values back |
 | `examples/sample_multi_sensor.py` | Multi-sensor setup with per-sensor port assignment |

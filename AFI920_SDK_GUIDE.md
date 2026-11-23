@@ -75,7 +75,8 @@ afi920-sdk/
 │   ├── afi_sdk.h                  ← AfiSdk class: lifecycle, callbacks, CSII, Discovery, Config API
 │   ├── afi_types.h                ← stream and Config API data types
 │   ├── afi_config.h               ← AfiSdkConfig
-│   └── afi_error.h                ← AfiError, AfiReturnCode, AfiErrorStr()
+│   ├── afi_error.h                ← AfiError, AfiReturnCode, AfiErrorStr()
+│   └── afi_compat.h               ← deprecated v2.1.0 SHII/SPI names (AFI_NO_COMPAT_NAMES omits them)
 ├── src/                           ← C++ implementation (static library target afi_sdk)
 ├── examples/cpp/                  ← sample_discovery, sample_pointcloud, sample_data_stream,
 │                                    sample_config, sample_multi_sensor, restart_sensor,
@@ -102,7 +103,7 @@ afi920-sdk/
 | Example | What it shows |
 |---------|---------------|
 | `sample_discovery` / `.py` | Discover sensors on the network |
-| `sample_pointcloud` / `.py` | Receive the RDI point cloud |
+| `sample_pointcloud` / `.py` | Receive the RDI point cloud. The Python version stores the transport argument and restarts the sensor when the sensor's stored detection protocol differs |
 | `sample_data_stream` / `.py` | Receive RDI, SHII and SPI together |
 | `sample_config` / `.py` | Read every config category (`.py --write` also writes values back) |
 | `sample_multi_sensor` / `.py` | C++: receive from up to 4 sensors. Python: write per-sensor data ports and restart each sensor |
@@ -273,7 +274,7 @@ cfg.enable_spi = true;
 
 afi::AfiSdk sdk;
 
-// RDI: point cloud (FW v3.1.1 and v3.1.2 send at most 2048 detections per frame; the protocol allows 8192)
+// RDI: point cloud (FW v3.1.1 and v3.1.2 send at most 2048 detections per scan; 8192 is the single-message limit of interface v1.1.0 and v1.0.x)
 sdk.RegRecvCallback([](const afi::AfiRdiFrame& f) {
     /* f.message.detections[0 .. f.message.num_detections-1], f.e2e_valid, f.generation */
 });
@@ -561,7 +562,7 @@ sdk.set_detection_filters(filter_ground_reflection=True, filter_multibounce_2x=T
 
 ### Time Sync (PTP)
 
-`SetPtpConfig(profile)` / `SetPtpConfig(profile, &restart_required)` stores `0` (gPTP), `1` (1588v2-L2) or `2` (1588v2-UDP); values above 2 give `kInvalidParam`. `GetPtpConfig` returns the running `profile`, the stored `configured_profile`, `restart_required`, the PTP port `state` (`"INIT"`, `"SLAVE"`, `"NOT_SYNCED"`; SHII SensorTimeSync reports the lock verdict), `offset_ns`, `mean_path_delay_ns`, `master_clock_id`, and `grid_offset_ns` / `grid_state` (radiate and send grid versus system time; stream timestamps are system time). Python: `get_ptp_config()`, `set_ptp_config(profile=0)`, `set_ptp_config_with_result(profile=0)`.
+`SetPtpConfig(profile)` / `SetPtpConfig(profile, &restart_required)` stores `0` (gPTP), `1` (1588v2-L2) or `2` (1588v2-UDP); values above 2 give `kInvalidParam`. `GetPtpConfig` returns the running `profile`, the stored `configured_profile`, `restart_required`, the PTP port `state` (`"INIT"`, `"SLAVE"`, `"NOT_SYNCED"`; SHII SensorTimeSync reports the lock verdict), `offset_ns`, `mean_path_delay_ns`, `master_clock_id`, and `grid_offset_ns` / `grid_state` (radiate and send grid versus system time; stream timestamps are system time (PHC) and do not carry the grid offset). Python: `get_ptp_config()`, `set_ptp_config(profile=0)`, `set_ptp_config_with_result(profile=0)`.
 
 ### Full Config API Method Catalog
 
@@ -747,7 +748,7 @@ elif result.rebooted:
 sdk.close()
 ```
 
-`update()` enters the programming mode through Diagnostic, uploads the bootloader first when given, uploads `m7_0`, `m7_1`, `m7_2`, `a53` to the inactive slot (checking `target_slot` per component), switches the slot once after every commit reached idle and confirms it on Boot-Info, and with `reboot=True` sends `FirmwareUpdateReboot` while the session is idle. It stops at the first failure. A `firmware` dict that does not hold exactly the four components is refused before anything is sent.
+`update()` enters the programming mode through Diagnostic, uploads the bootloader first when given, uploads `m7_0`, `m7_1`, `m7_2`, `a53` to the inactive slot (checking `target_slot` per component), switches the slot once after every commit reached idle (only when the written face is not already active) and confirms it on Boot-Info, and with `reboot=True` sends `FirmwareUpdateReboot` while the session is idle. It stops at the first failure. A `firmware` dict that does not hold exactly the four components is refused before anything is sent.
 
 | Function / type | Description |
 |-----------------|-------------|
@@ -1009,7 +1010,7 @@ The Python `AfiSdkConfig` dataclass has `sensor_ip`, `config_port`, `csii_port`,
 | `announced_detections` | `uint16_t` | Detections the header announces; `message.num_detections` is lower when chunks are missing |
 | `IsComplete()` | `bool` | `chunks_received == chunk_count` and `message.num_detections == announced_detections` |
 
-`message` holds the ISO23150 Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection, up to 8192 detections; FW v3.1.1 and v3.1.2 send at most 2048.
+`message` holds the ISO23150 Header (`interface_version`, `sensor_id`, `timestamp` in ns, `message_counter`, `interface_cycle_time`, `data_qualifier`), `ambiguity_domain.radial_velocity_begin` / `radial_velocity_end`, `recognised_detections_capability`, `num_detections` and `detections`. An RDI payload is a 36-byte header plus 51 bytes per detection. The single-message format of interface v1.1.0 and v1.0.x carries up to 8192 detections, interface v1.2.0 at most 2048 per scan, and FW v3.1.1 and v3.1.2 send at most 2048.
 
 ### Detection Fields (`bts_rdi_detection_t`, 51 bytes)
 
@@ -1057,7 +1058,8 @@ The Config API rotation (`AfiRotation`, `get_rotation()`) is in degrees; the SPI
 |-------|:---:|:---:|-------------|
 | `stream` | | ✓ | `AfiStreamKind::kDetection`, `kHealth` or `kPerformance` |
 | `recv_timestamp_ns` | ✓ | ✓ | Host receive time (steady clock) |
-| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO23150 Header timestamp and MessageCounter |
+| `sensor_timestamp_ns`, `message_counter` | | ✓ | ISO23150 Header timestamp and MessageCounter. An interface v1.2.0 RDI chunk carries its Chunk Header MessageCounter and no sensor timestamp |
+| `event_id`, `someip_interface_version` | | ✓ | SOME/IP Event ID and Interface Version: RDI header A and B are `0x8002`, chunk k is `0x8100 + k` (Interface Version 0x02) |
 | `e2e_counter`, `e2e_checked`, `e2e_valid` | ✓ | ✓ | E2E Counter and verdict |
 | `payload` | | ✓ | E2E header plus ISO payload, exactly as reassembled |
 | `generation` | ✓ | ✓ | Sender's generation |
@@ -1123,11 +1125,12 @@ C++ codes are the `afi::AfiError` enum in `afi_error.h`. Python constants have t
 | 30500 | TCP | ↔ | | `0x6000 << 16 \| Method ID` | Config API (SOME/IP + JSON; raw binary firmware chunks), Method IDs `0x0010` to `0x00E1` |
 | 30501 | UDP (v1.1.0 and later), TCP (v1.0.x) | → | `0x8001` | `0x60008001` | CSII vehicle input |
 | 30509 | TCP/UDP | ← | `0x8002` | `0x60008002` | RDI point cloud |
+| 30509 | TCP/UDP | ← | `0x8100 + k` | `0x60008100 + k` | RDI chunk k = 0 to 75 (interface v1.2.0) |
 | 30510 | TCP/UDP | ← | `0x8003` | `0x60008003` | SHII health |
 | 30511 | TCP/UDP | ← | `0x8004` | `0x60008004` | SPI performance |
 | 30520 | UDP broadcast | ↔ | | (none) | Discovery |
 
-Over TCP (default) the host connects to the sensor's stream port. Over UDP the host binds the stream port. SOME/IP Service ID is `0x6000`. The radar sends one RDI, SHII and SPI message per 100 ms send slot.
+Over TCP (default) the host connects to the sensor's stream port. Over UDP the host binds the stream port. SOME/IP Service ID is `0x6000`. Per 100 ms send slot the radar sends one SHII and one SPI message, and one RDI scan: one message on interface v1.1.0 and v1.0.x, header A, chunk messages and header B on interface v1.2.0.
 
 **Protocol stack (data streams):**
 ```
@@ -1169,7 +1172,7 @@ Over TCP each sensor keeps the default ports, so no offset is needed.
 |---------|-------|
 | `ping` fails | Host IP in `192.168.10.x`? Cable, NIC and firewall |
 | `Init()` returns `kConnectFailed` | A TCP stream could not connect or a UDP port could not be bound. Check `sensor_ip`, cable, subnet, and other processes on the port |
-| `Init()` returns `kInvalidParam` | A transport string other than `"tcp"` or `"udp"` (`csii_transport` also accepts empty) |
+| `Init()` returns `kInvalidParam` | A transport string other than `"tcp"` or `"udp"` for an enabled stream, or in `csii_transport` (which also accepts empty) |
 | `Start()` succeeds but no callbacks | `GetNetworkConfig` destination IP, port and protocol must match `AfiSdkConfig`. Over UDP, datagrams from an address other than `sensor_ip` are dropped. A unicast destination IP also limits TCP stream clients to that IP |
 | Callbacks fire but `num_detections == 0` | Object in the FoV? Range mode (`GetRangeMode`)? DataQualifier `1` means the content must not be used |
 | A SET returns `kSessionRequired` | Call `EnterMode(kDiagnostic)` before the SET |

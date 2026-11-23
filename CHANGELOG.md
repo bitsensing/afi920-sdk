@@ -6,8 +6,8 @@ All notable changes to the AFI920 SDK will be documented in this file.
 
 ## v2.2.0 — Interface v1.2.0 and v1.1.0
 
-Release tracking the AFI920 interface v1.2.0 and v1.1.0 (sensor firmware
-v3.1.1).
+Release tracking the AFI920 interface v1.2.0 (sensor firmware v3.1.2) and
+v1.1.0 (sensor firmware v3.1.1).
 **Breaking** — the E2E CRC, the Config API framing and parts of the
 public API change. Sensors on interface v1.0.x (firmware 3.0.0 to 3.1.0)
 remain supported for data reception in this release only.
@@ -24,6 +24,19 @@ remain supported for data reception in this release only.
   `bts_e2e_apply_crc_contig`, `bts_e2e_apply_crc_split`,
   `bts_e2e_pack_be64`, `BTS_E2E_CRC64_INIT` and `BTS_E2E_CRC64_XOROUT` are
   removed; `bts_e2e_apply_crc(hdr, body, body_len)` writes the CRC-32.
+  Python `strip_e2e()` takes `expected_data_id` and adds `length_ok`,
+  `data_id_ok`, `crc_zero`, `ok` and `generation` to its result; `crc_ok` is
+  false for a zero CRC field.
+- **Stream frame checks** — every RDI, SHII and SPI frame is checked for an
+  E2E Length equal to the body length and the stream's Data ID, also with
+  `validate_e2e` off; with `e2e_strict` a failing frame is dropped although
+  its CRC is correct. The SHII and SPI parsers (C++ and Python) drop a frame
+  whose list counts exceed the maximum, that is truncated or that carries
+  trailing bytes, instead of clamping it (`SPI_MIN_SIZE` 60, was 57).
+- **Transport names** — for each enabled stream, `stream_transport` and the
+  stream's transport field accept only `"tcp"` and `"udp"`; any other value
+  makes `Init()` return `kInvalidParam` (any value but `"tcp"` selected UDP
+  before).
 - **Interface headers on the include path** — only `bts_iso23150.h`,
   `bts_iso23150_e2e.h` and `AFI920/bts_iso23150_{rdi,shi,spi,csii}.h` are
   shipped and installed. `bts_iso23150_someip.h`, `generated/someip.h`,
@@ -54,13 +67,32 @@ remain supported for data reception in this release only.
   `status_snapshot_stale` / `status_stale_cycles` (C++ and Python).
 - **CSII over UDP** — on interface v1.1.0 and later, `SendVehicleInput()` /
   `send_vehicle_input()` sends one UDP datagram per message to port 30501;
-  `sensor_id` defaults to 1.
+  `sensor_id` defaults to 1, also in Python `streams.build_csii_payload()`.
 - **Error codes** — sensor answers formerly reported as `kSensorError` map
   to `kInvalidParam`, `kNotSupported`, `kBusy` (-11), `kSessionRequired`
   (-12), `kAccessDenied` (-13) or `kInvalidState` (-14). Python codes take
   the C++ values (`DISCONNECTED` -1 → -5, `TIMEOUT` -2 → -4,
   `PROTOCOL_ERROR` -3 → -7, `NOT_SUPPORTED` -9 → -10); Python argument
   checks return `INVALID_PARAM` and a failed `init()` `CONNECT_FAILED`.
+  `kBusy` answers a request rate above 200 per second, a `GetFaultLog` flash
+  job and any NVM-writing method within 3 s of boot.
+- **Config API transport failures** — a send failure, timeout or lost
+  connection returns `kTimeout`, `kProtocolError`, `kInvalidParam` or
+  `kDisconnected` (C++) and `TIMEOUT`, `PROTOCOL_ERROR` or `DISCONNECTED`
+  (Python), no longer `kConnectFailed` (C++) or `SENSOR_ERROR` (Python).
+- **Connection probe** — every Config API connection, including the one
+  `init()` / `Init()` opens, starts with a GetDeviceInfo request, and a
+  connection whose probe fails counts as failed: Python `init()` returns
+  `CONNECT_FAILED` for an endpoint that accepts TCP but does not answer.
+- **Detection threshold read** — `GetDetectionThreshold` returns
+  `kProtocolError` for a CFAR table that does not hold exactly 19 levels of 1
+  to 9; it substituted the default table (19 x level 5) before.
+- **RDI size macros** — `BTS_RDI_MAX_DETECTIONS` is 2048 (was 4096), the
+  interface v1.2.0 scan limit. `BTS_RDI_MAX_PAYLOAD_SIZE` is computed from
+  `BTS_RDI_LEGACY_MAX_DETECTIONS` 8192 (was 4096), because single-message RDI
+  delivers up to 8192 detections per `AfiRdiFrame`; size buffers with
+  `BTS_RDI_LEGACY_MAX_DETECTIONS`. Python `streams.RDI_MAX_DETECTIONS` is
+  8192.
 - **SHII and SPI enumerators** — the interface headers drop or rename
   `BTS_SHI_SOM_EVALUATION_MODE` (50), `BTS_SHI_SOM_CALIBRATION_MODE` (100),
   `BTS_SHI_SOM_TEST_MODE` (201), `BTS_SHI_SDR_OUT_OF_ORDER` (2),
@@ -68,14 +100,16 @@ remain supported for data reception in this release only.
   (4), `BTS_SHI_SDR_CONFIGURATION_ERROR` (6), `BTS_SHI_SDR_SOFTWARE_DEFECT`
   (8), `BTS_SHI_SDR_COMPUTING_POWER` (9), `BTS_SHI_CPS_*` (now
   `BTS_SHI_SCST_COMPLETED` 0, `_NOT_PERFORMED` 1, `_IN_PROGRESS` 2,
-  `_FAILED` 3) and `BTS_SPI_BS_UNKNOWN` (3). Value 100 is now
+  `_FAILED` 3) and `BTS_SPI_BS_UNKNOWN` (3), and add
+  `BTS_SHI_SOM_NORMAL_ULTRA_DUAL_RANGE` (6), `BTS_SHI_SOM_DIAGNOSTIC_MODE` (20)
+  and `BTS_SHI_SOM_PROGRAMMING_MODE` (21). Value 100 is now
   `BTS_SHI_SOM_FAULT_MODE`, defect reason 1 `BTS_SHI_SDR_SUPPLY_VOLTAGE_FAULT`
   and calibration state 2 `BTS_SHI_SCST_IN_PROGRESS`. `afi/afi_compat.h`,
   included by `afi_types.h`, keeps the old names with their v2.1.0 values as
   deprecated constants, so existing code compiles with a warning that states
   the current meaning; define `AFI_NO_COMPAT_NAMES` to omit them.
 - **Defaults** — `AfiPtpConfig::priority1` / `priority2` 255 (was 128);
-  `AfiDetectionFilter` turns `filter_ground_sidelobe` and
+  `AfiDetectionFilters` turns `filter_ground_sidelobe` and
   `filter_structure_multipath` on (were off); `AfiRangeMode` gains value
   6, so exhaustive `switch` statements need a case.
 
@@ -109,12 +143,18 @@ remain supported for data reception in this release only.
 - **Python `afi_sdk.firmware`** — `update()` enters the Programming mode,
   writes the bootloader when given and all four firmware components
   (`m7_0`, `m7_1`, `m7_2`, `a53`) to the inactive slot face, switches the
-  slot with Boot-Info confirmation and reboots; `wait_for_restart()` and
-  `verify()` confirm the result.
+  slot with Boot-Info confirmation (sent only when the written face is not
+  already active) and reboots; `wait_for_restart()` and `verify()` confirm
+  the result. `upload_component()` aborts a session that a refused
+  `FirmwareUpdateStart` left in `error`, and `FirmwareUpdateStatus` may
+  report `"initializing"`.
 - **Sensor result and reconnect** — `GetLastSensorResult()`
-  (`AfiSensorResult`) and Python `last_error` / `last_result` hold the
-  sensor's return code and name, `error_message` and the response E2E
-  verdict; `AfiReturnCode` and `AfiReturnCodeName()` name the codes.
+  (`AfiSensorResult`) and Python `last_result` hold the sensor's return code
+  and name, `error_message` and the response E2E verdict; Python
+  `last_error` is the SDK error code of the last call. `AfiReturnCode` and
+  `AfiReturnCodeName()` name the codes, and
+  `AfiErrorFromReturnCode()` / Python `error_from_result()` map them to SDK
+  error codes.
   `ReconnectConfigApi()` / `reconnect()` wait for the sensor after
   `Restart()` or `FirmwareUpdateReboot()`.
 - **Interface v1.0.x data compatibility (this release only)** — RDI, SHII
@@ -128,21 +168,34 @@ remain supported for data reception in this release only.
   pass `AfiStreamMeta`. `RegWirePayloadCallback()` emits the validated E2E
   header plus ISO payload (`AfiWirePayloadFrame`) before typed decoding.
 - **Range mode and PTP** — UDR (`kUltraDualRange` / `ULTRA_DUAL_RANGE`) and
-  `AfiRangeModeName()`; PTP profiles 0 to 2 with `configured_profile`,
+  `AfiRangeModeName()`; PTP profiles 0 to 2 with `configured_profile`, `configured_profile_name`,
   `restart_required`, `grid_offset_ns` and `grid_state`. `SetRangeMode` and
-  `SetPtpConfig` overloads report `restart_required`.
+  `SetPtpConfig` overloads and Python `set_ptp_config_with_result()` report
+  `restart_required`. `grid_offset_ns` is the radiate and send grid minus
+  system time, and stream timestamps do not carry it.
 - **CMake package** — `cmake --install` installs the library and headers,
   and `find_package(afi_sdk)` provides the `afi::afi_sdk` target.
 - **Other additions** — per-stream `rdi_transport`, `shi_transport` and
   `spi_transport` overrides; Python `crc32_ieee()`, `e2e_data_id()`,
-  `SomeipTpReassembler`, `RC_*`, `ERR_*` and `ACCESS_MODE_*`.
+  `SomeipTpReassembler`, `RC_*`, `ERR_*` and `ACCESS_MODE_*`; Python
+  `discovery_generation()`, `INTERFACE_GEN_UNKNOWN`, `INTERFACE_GEN_V1_0`,
+  `INTERFACE_GEN_V1_1`, `NOT_INITIALIZED`, `INTERNAL_ERROR`, `BUSY`,
+  `SESSION_REQUIRED`, `ACCESS_DENIED` and `INVALID_STATE` in `afi_sdk`, and
+  `generation_from_if_version()`, `RETURN_CODE_NAMES` and `MAX_REQUEST_BODY`
+  in `afi_sdk.someip`; the `_interface_generation` key in every Python
+  `discover()` result; the ISO23150 Header keys `num_serving_sensors`,
+  `interface_cycle_time`, `cycle_time_variation` and `data_qualifier` in
+  Python `parse_shi()` and `parse_spi()`, and `recognisable_object_types` and
+  `reference_target_types` in `parse_spi()`.
 
 ### Changed
 
 - **Config API transport** — a response must echo its request's Message,
   Client and Session ID; a timeout, lost connection or mismatch closes the
-  socket and the next call reconnects. Request bodies above 16,384 B are
-  refused before sending.
+  socket and the next call reconnects. When the connect in `Init()` fails,
+  Config API calls connect on demand (each may wait up to
+  `connect_timeout_ms`) instead of returning `kNotInitialized`. Request
+  bodies above 16,384 B are refused before sending.
 - **Detection threshold** — the CFAR tables hold levels 1..9 per range
   segment; `cfar_table_second_frame` exists only in DR and UDR
   (`has_cfar_table_second_frame`).
@@ -155,32 +208,37 @@ remain supported for data reception in this release only.
   `range_mode` is the SHII SensorOperationMode with the access mode applied
   (0 to 6, 10 Degradation, 20 Diagnostic, 21 Programming, 100 Fault, 200
   Initialising), not the stored `GetRangeMode` value.
-- **Sensor answers** — `kBusy` also covers a `GetFaultLog` flash job and any
-  NVM-writing method within 3 s of boot. `AfiPtpConfig::state` is the PTP
-  port state, not the lock verdict (SHII SensorTimeSync reports lock);
-  `grid_offset_ns` is the radiate and send grid minus system time, and stream
-  timestamps do not carry it.
+- **PTP state** — `AfiPtpConfig::state` is the PTP port state, not the lock
+  verdict (SHII SensorTimeSync reports lock).
 - **RDI field values** — the docs follow interface v1.2.0: the ambiguity
   domain is computed per frame (`radial_velocity_begin` −17.21 to −12.05 m/s,
   `radial_velocity_end` 12.05 to 17.21 m/s) and `relative_velocity_radial`
   can lie outside it; `existence_probability` is 1 to 100 with the real,
   suspected ghost, likely ghost and ghost bands and the shape-estimation
-  markers 98, 97, 95 and 93; `ambiguity_grouping_id` is always 0.
-- **Firmware update** — Python `upload_component()` aborts a session that a
-  refused `FirmwareUpdateStart` left in `error`; `FirmwareUpdateStatus` may
-  report `"initializing"`.
-- **Interface headers** — vendored under `third_party/afi920_interface/src/c`
-  and updated to interface v1.2.0 (CRC-32 helpers in `bts_iso23150_e2e.h`,
-  `BTS_RDI_MAX_DETECTIONS` 2048 per v1.2.0 scan; the single-message RDI of
-  v1.1.0 and v1.0.x keeps `BTS_RDI_LEGACY_MAX_DETECTIONS` 8192); no extra
-  checkout step is needed.
+  markers 98, 97, 95 and 93; `ambiguity_grouping_id` is always 0;
+  `detection_id` is the 0-based index in the scan (was 0xFFFF if unused).
+- **Interface headers** — the vendored headers under
+  `third_party/afi920_interface/src/c` are updated to interface v1.2.0
+  (CRC-32 helpers in `bts_iso23150_e2e.h`, RDI size macros above). New in
+  the headers: `BTS_INTERFACE_VERSION_MAJOR`
+  / `_MINOR` / `_PATCH` / `_STR`, `BTS_SOMEIP_INTERFACE_VERSION_RDI`,
+  `BTS_SOMEIP_EVENT_RDI_CHUNK_BASE`, `BTS_SOMEIP_EVENT_SECURITY` (reserved),
+  `BTS_SOMEIP_MSGTYPE_TP_NOTIFICATION`, `BTS_SOMEIP_UDP_PAYLOAD_MAX`,
+  `BTS_E2E_DATA_ID()`, `BTS_RDI_DETECTION_CAPABILITY`,
+  `BTS_RDI_LIST_LAYOUT_SIZE`, `BTS_RDI_CHUNK_HEADER_SIZE`,
+  `BTS_RDI_ENTITIES_PER_CHUNK`, `BTS_RDI_MAX_CHUNK_SIZE`, `BTS_RDI_MAX_CHUNKS`
+  and the declarations `bts_rdi_chunk_count`, `bts_rdi_build_header_msg` and
+  `bts_rdi_build_chunk`.
 - **Examples** — Python `sample_config.py` writes only with `--write`;
   `sample_multi_sensor.py`, `set_yaw_90.py` and the C++
   `set_stream_destination` enter the Diagnostic mode, restart and
   reconnect; `restart_sensor` waits for the Config API to return.
   `sample_pointcloud.py` does the same when it switches the transport and
   counts loss on the E2E Counter. `tools/rdi_udp_sender.py` emits the
-  interface v1.1.0 single-message RDI layout.
+  interface v1.1.0 single-message RDI layout, defaults to 10 fps (was 20),
+  rejects a non-positive fps and a detection count above
+  `RDI_MAX_DETECTIONS`, and imports `afi_sdk.streams` from `../python/src`
+  (else an installed `afi_sdk`).
   `sample_data_stream.py` no longer writes the sensor's stream transport: it
   reads the configured transport and uses it, and decodes RDI through
   `RdiStreamDecoder`, reporting partial scans.

@@ -217,7 +217,7 @@ cmake --build .
 | 플랫폼 | 출력 파일 | 경로 |
 |---------|-----------|------|
 | Linux | `libafi_sdk.a` | `build/src/libafi_sdk.a` |
-| Windows | `afi_sdk.lib` | `build/src/afi_sdk.lib` |
+| Windows | `afi_sdk.lib` | `build/src/Release/afi_sdk.lib`(Visual Studio 생성기), `build/src/afi_sdk.lib`(NMake, Ninja) |
 
 ### CMake 통합
 
@@ -277,6 +277,7 @@ python -c "import afi_sdk; print(afi_sdk.__version__)"
 | 30500 | TCP | 호스트 ↔ 센서 | (없음) | Config API (SOME/IP + JSON/raw chunk, Method ID `0x0010`~`0x00E1`) |
 | 30501 | UDP (v1.1.0 이후), TCP (v1.0.x) | 호스트 → 센서 | `0x8001` | CSII (Vehicle Input) |
 | 30509 | TCP/UDP | 센서 → 호스트 | `0x8002` | RDI (Radar Detections / Point Cloud) |
+| 30509 | TCP/UDP | 센서 → 호스트 | `0x8100`–`0x814B` | RDI chunk k = 0~75 (인터페이스 v1.2.0) |
 | 30510 | TCP/UDP | 센서 → 호스트 | `0x8003` | SHII (Sensor Health Information) |
 | 30511 | TCP/UDP | 센서 → 호스트 | `0x8004` | SPI (Sensor Performance Information) |
 | 30520 | UDP | 호스트 ↔ 센서 | (없음) | Discovery (Broadcast) |
@@ -302,7 +303,7 @@ SDK는 인터페이스 v1.0.x(펌웨어 3.0.0~3.1.0), v1.1.0(펌웨어 3.1.1), v
 
 인터페이스 v1.2.0은 RDI 스캔 하나를 헤더 A, 묶음 메시지, 헤더 B로 나누어 송신한다(SOME/IP Interface Version 0x02, Event `0x8002`와 `0x8100`~`0x814B`, Event마다 별도 E2E Data ID). SDK는 E2E Counter를 기준으로 이 메시지를 스캔 하나의 `AfiRdiFrame`으로 조립한다(Interface Overview §3.2.3). 따라서 RDI 콜백은 모든 세대에서 같은 형식의 프레임을 받는다. 묶음이 빠진 스캔은 도착한 검출만으로 전달하며, `chunk_count`, `chunks_received`, `announced_detections`, `IsComplete()`가 그 상태를 표시한다. 헤더 메시지를 하나도 받지 못한 스캔은 폐기한다. payload 콜백은 모든 메시지를 `event_id`, `someip_interface_version`과 함께 받는다. Python 수신부는 `streams.RdiStreamDecoder`를 사용하며, 이 클래스는 스캔마다 `parse_rdi_frame`으로 해석하는 단일 메시지 형식 RDI payload를 반환한다.
 
-SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요청으로 세대를 판정한다. 응답의 `if_version` 키는 v1.2.0 이후 세대를 표시한다. Config API를 끈 구성에서는 E2E 검증을 통과한 스트림 프레임으로 판정한다. 판정 결과는 `GetInterfaceGeneration()`(C++)과 `interface_generation`(Python)에서 확인한다. Discovery는 센서별 세대를 `AfiSensorInfo::generation`과 Python `_interface_generation` 키로 보고한다. v1.0.x 센서에서는 이 요청 직후 Config API 연결을 닫고, 이후의 Config API 호출을 송신하지 않고 반환한다. v1.0.x 센서는 해석하지 못한 v1.1.0 요청 가운데 Restart, ResetAllSettings 같은 일부 요청을 실행하기 때문이다.
+SDK는 Config API 연결을 시작할 때마다 읽기 전용 GetDeviceInfo 요청으로 세대를 판정한다. 응답의 `if_version` 키는 v1.2.0 이후 세대를 표시한다. Config API를 끈 구성에서는 E2E 검증을 통과한 스트림 프레임으로 판정한다. 판정 결과는 `GetInterfaceGeneration()`(C++)과 `interface_generation`(Python)에서 확인한다. Discovery는 센서별 세대를 `AfiSensorInfo::generation`과 Python `_interface_generation` 키로 보고한다. v1.0.x 센서에서는 이 요청 직후 Config API 연결을 닫고, 이후의 Config API 호출을 송신하지 않고 반환한다. v1.0.x 센서는 해석하지 못한 v1.1.0 요청 가운데 Restart, ResetAllSettings 같은 일부 요청을 실행한다.
 
 스트림 layout은 v1.0.x와 v1.1.0에서 같다. SDK는 모든 값을 변환하지 않고 전달하며, 아래 필드는 v1.0.x에서 의미가 다르다. 세대는 payload ISO23150 Header의 인터페이스 버전(`1.0.0`, `1.1.0` 또는 `1.2.0`)으로 구분한다.
 
@@ -436,9 +437,9 @@ Python SDK는 같은 숫자 값을 사용한다(`OK`, `NOT_INITIALIZED`, `CONNEC
 | 프로그램 | 설명 |
 |----------|------|
 | `sample_discovery.py` | 네트워크에서 센서 탐색 |
-| `sample_pointcloud.py` | RDI Point Cloud 데이터 수신 |
+| `sample_pointcloud.py` | RDI Point Cloud 데이터 수신. 센서에 저장된 detection protocol이 전송 방식 인자(기본 `tcp`)와 다르면 인자 값을 저장(Diagnostic 모드, NVM)하고 센서를 재시작한다 |
 | `sample_data_stream.py` | RDI/SHII/SPI 데이터 동시 수신 |
-| `sample_config.py` | 센서 설정 조회 및 동일 값 재기록 |
+| `sample_config.py` | 센서 설정 조회. `--write`를 지정하면 동일 값을 재기록한다 |
 | `sample_multi_sensor.py` | 다중 센서 데이터 포트 설정 |
 | `set_yaw_90.py` | 장착 yaw 기록 후 재시작으로 적용 |
 
@@ -550,7 +551,7 @@ python ../test/test_live_firmware.py 192.168.10.150 --images DIR --fw-hash <hash
 | `object_id_reference` | `uint16_t` | 연계 Object ID (예약) |
 | `position_*_error`, `relative_velocity_radial_error` | `float` | 측정 오차 (거리/수평각/수직각/속도) |
 
-프로토콜은 프레임당 최대 **8192개 detection**(36바이트 헤더 + detection당 51바이트)을 허용하며, 펌웨어 v3.1.1과 v3.1.2는 최대 2048개를 송신한다. UDP 대형 프레임은 SOME/IP-TP로 분할되며 SDK가 자동으로 재조립한다. TCP는 완전한 SOME/IP 프레임 하나로 수신한다.
+인터페이스 v1.2.0(펌웨어 v3.1.2)은 한 스캔을 header 메시지와 최대 27개 detection의 chunk 메시지로 송신하며, 각 메시지는 datagram 하나에 담기고 스캔당 최대 2048개이다. 인터페이스 v1.1.0과 v1.0.x는 스캔당 메시지 하나(36바이트 헤더 + detection당 51바이트)로 최대 **8192개 detection**을 송신하며, 펌웨어 v3.1.1은 최대 2048개를 송신한다. UDP에서는 이 메시지를 SOME/IP-TP로 분할하며 SDK가 자동으로 재조립한다. TCP는 완전한 SOME/IP 프레임 하나로 수신한다.
 
 > **중요** callback으로 받은 frame 참조는 callback 실행 중에만 유효하다. `AfiRdiFrame` 전체를 복사하면 복사본이 vector를 소유하고 C payload 포인터를 다시 연결하므로 안전하다. 공개 storage vector를 직접 resize하거나 교체한 경우에는 `RebindStorage()`를 호출한다.
 
@@ -577,7 +578,7 @@ AfiSdk
 - TCP 데이터 스트림은 연결이 끊기면 1초에서 최대 30초까지 늘어나는 간격으로 재연결한다.
 - `SendVehicleInput()`은 호출자 스레드에서 실행되며, 첫 호출 시 CSII 소켓을 생성한다. 인터페이스 v1.1.0 이후에는 UDP, v1.0.x에는 TCP 소켓을 사용한다.
 - 각 Config API 연결은 인터페이스 세대를 판정하는 읽기 전용 GetDeviceInfo 요청으로 시작한다. v1.0.x이면 연결을 닫고, Config API 호출은 송신 없이 `kNotSupported`를 반환한다.
-- Config API 클라이언트는 요청을 한 번에 1건씩 송신하며, 각 응답이 요청의 message ID, client ID, session ID, 프로토콜 버전 `0x01`, RESPONSE 타입을 그대로 돌려주는지 검증한다. 타임아웃, 불일치 응답, 연결 소실이 발생하면 소켓을 닫고, 다음 호출에서 같은 endpoint로 재연결한다. 요청당 대기 시간은 `request_timeout_ms`로 제한하며, 본문이 16,384바이트를 넘는 요청은 송신하지 않고 `kInvalidParam`을 반환한다.
+- Config API 클라이언트는 요청을 한 번에 1건씩 송신하며, 각 응답이 요청의 message ID, client ID, session ID, 프로토콜 버전과 interface 버전 `0x01`, RESPONSE `0x80` 또는 ERROR `0x81` 타입을 갖추는지 검증한다. 타임아웃, 불일치 응답, 연결 소실이 발생하면 소켓을 닫고, 다음 호출에서 같은 endpoint로 재연결한다. 요청당 대기 시간은 `request_timeout_ms`로 제한하며, 본문이 16,384바이트를 넘는 요청은 송신하지 않고 `kInvalidParam`을 반환한다.
 - `Init()` 중 Config API 연결에 실패해도 `Init()`은 실패하지 않는다. SDK는 endpoint를 유지하며 다음 Config API 호출에서 연결한다. `Stop()` 이후 `Init()`을 다시 호출할 수 있다.
 
 ---
@@ -592,7 +593,7 @@ AfiSdk
 | SET은 성공했으나 동작이 바뀌지 않음 | 설정은 재시작 후 반영 | `Restart()` 호출 후 `ReconnectConfigApi()` 호출 |
 | 프로그래밍 모드 진입 후 데이터 스트림 정지 | 프로그래밍 모드는 RDI/SHII/SPI 송출을 정지 | 레이더 재시작 |
 | Config API 호출이 `kTimeout` 또는 `kDisconnected` 반환 | `request_timeout_ms` 내 무응답, 연결 소실, 또는 다른 클라이언트가 레이더의 단일 Config API 연결을 점유 | 다음 호출에서 자동 재연결, 다른 Config API 클라이언트 종료 |
-| `kBusy` 반환 | 초당 200건 초과 요청 | 요청 빈도 감축 |
+| `kBusy` 반환 | 초당 200건 초과 요청, `GetFaultLog` flash 작업, 기동 후 3초 이내 저장 설정 기록 | 요청 빈도 감축 또는 재시도 |
 | Config API는 동작하지만 데이터가 수신되지 않음 | 스트림 목적지 또는 전송 방식 불일치, 또는 `sensor_ip`가 아닌 주소에서 온 UDP datagram | `GetNetworkConfig`로 목적지 IP/포트/프로토콜 확인 후 `AfiSdkConfig`와 일치 |
 | Discovery 결과에 센서 누락 | UDP 응답 유실 또는 다른 NIC로 브로드캐스트 송출 | Discovery 재수행, `bind_ip` 지정 |
 | 로그에 E2E CRC 불일치 경고 발생 | 프레임 손상 | 프레임별 `e2e_valid` 확인, `e2e_strict = true`로 실패 프레임 폐기 |

@@ -4,7 +4,7 @@
  *
  * Variable-length payload: operation modes, input signals, and calibration
  * components are serialized as N elements driven by their num_valid_* count.
- * Authoritative spec: docs/02_SHII_Health_Info.md
+ * Authoritative spec: SHII specification
  */
 
 #ifndef BTS_ISO23150_SHI_H
