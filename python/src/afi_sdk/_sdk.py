@@ -4,7 +4,7 @@ AFI920 Python SDK — AfiSdk class
 High-level Python API for AFI920 4D Imaging Radar.
 Mirrors the C++ AfiSdk API for consistent developer experience.
 
-Interface v1.1.0 method ID registry.
+Method ID registry of interface v1.1.0 and later.
 
 Copyright (c) 2026 bitsensing Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
@@ -94,7 +94,8 @@ class AfiSdkConfig:
     stream_transport: str = "tcp"
     validate_e2e: bool = True
     #: CSII transport: "" picks it from the interface generation (UDP on
-    #: v1.1.0, TCP on v1.0.x, UDP while unknown); "udp" or "tcp" forces one.
+    #: v1.1.0 and later, TCP on v1.0.x, UDP while unknown); "udp" or "tcp"
+    #: forces one.
     csii_transport: str = ""
 
 
@@ -116,7 +117,7 @@ class RangeMode:
 
 
 class AccessMode:
-    """Config API access mode (interface v1.1.0, 11_Access_Mode).
+    """Config API access mode (interface v1.1.0 and later, 11_Access_Mode).
 
     Entry is one way, NORMAL -> DIAGNOSTIC -> PROGRAMMING; only a reboot
     returns to NORMAL. DIAGNOSTIC opens every config SET; PROGRAMMING opens
@@ -299,7 +300,7 @@ class AfiSdk:
         """Send one CSII vehicle-input message (port 30501, Event 0x8001).
 
         Call cyclically (100 ms recommended). One call is one UDP datagram on
-        interface v1.1.0 and one message on a TCP connection on v1.0.x
+        interface v1.1.0 and later and one message on a TCP connection on v1.0.x
         (``AfiSdkConfig.csii_transport``); the socket is created on first use
         and the SDK maintains the message/E2E counters.
         """

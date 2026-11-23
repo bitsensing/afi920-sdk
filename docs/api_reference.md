@@ -28,7 +28,7 @@ The SDK talks to the sensor with SOME/IP over TCP and UDP:
 - **Data streams** (RDI, SHII, SPI) carry ISO 23150 binary payloads inside SOME/IP frames over TCP or UDP. `stream_transport` sets the default and `rdi_transport` / `shi_transport` / `spi_transport` override it per stream. Every stream payload carries a 20-byte E2E header, see [E2E Protection](#e2e-protection).
 - **CSII (vehicle input)** is the only Host to Radar stream. An interface v1.1.0 or later sensor accepts it on UDP 30501 only, a v1.0.x sensor on TCP 30501 only; see [Vehicle Input](#vehicle-input-csii-host--radar).
 - **SOME/IP headers** and **E2E headers** are big-endian. **ISO 23150 payloads** are little-endian.
-- UDP RDI frames (up to 8192 detections) use SOME/IP-TP when they exceed one datagram. TCP always carries one complete SOME/IP frame.
+- Interface v1.2.0 sends RDI as header and chunk messages, each in one datagram (at most 2048 detections per scan). The single RDI message of interface v1.1.0 and v1.0.x (up to 8192 detections) uses SOME/IP-TP over UDP when it exceeds one datagram. TCP always carries one complete SOME/IP frame.
 - **Discovery** uses UDP port 30520 without an E2E header.
 
 ### Data Stream Event IDs
@@ -41,7 +41,7 @@ The SDK talks to the sensor with SOME/IP over TCP and UDP:
 | SHII (Sensor Health) | Radar → Host | `0x8003` | `0x60008003` | 30510 |
 | SPI (Sensor Performance) | Radar → Host | `0x8004` | `0x60008004` | 30511 |
 
-The sensor sends one RDI, SHII and SPI message per 100 ms send slot.
+Per 100 ms send slot the sensor sends one SHII and one SPI message, and one RDI scan: one message on interface v1.1.0 and v1.0.x, header A, chunk messages and header B on interface v1.2.0.
 
 ---
 
@@ -149,9 +149,9 @@ bool IsRunning() const;
 
 - `Init()` stores the configuration, connects the Config API (if `enable_config_api`), and opens the enabled stream sockets. It does not start receiver threads.
   - A failed Config API connect is not fatal. The endpoint is kept and later Config API calls connect on demand.
-  - An invalid transport string returns `kInvalidParam`. A stream socket that cannot be opened returns `kConnectFailed`. In both cases everything opened during the attempt is released and `Init()` can be called again.
+  - An invalid transport string of an enabled stream, or an invalid `csii_transport`, returns `kInvalidParam`. The transport fields of disabled streams are not checked. A stream socket that cannot be opened returns `kConnectFailed`. In both cases everything opened during the attempt is released and `Init()` can be called again.
   - Calling `Init()` while initialized or running returns `kAlreadyRunning`. `Init()` works again after `Stop()`.
-- `Start()` spawns one receiver thread per enabled stream and returns. It returns `kNotInitialized` unless `Init()` succeeded.
+- `Start()` spawns one receiver thread per enabled stream and returns. It returns `kNotInitialized` unless `Init()` succeeded and the SDK is not already started.
 - `Stop()` stops the threads and closes every connection, including the Config API.
 - `IsRunning()` returns `true` between `Start()` and `Stop()`.
 
@@ -241,14 +241,14 @@ int ReconnectConfigApi(int timeout_ms = 60000);
 ```
 
 - Every Config API connection, including the one `Init()` opens, starts with a read-only GetDeviceInfo request. Its answer decides the interface generation. A v1.0.x sensor answers JSON without the E2E header. The SDK then closes the connection, and every later call returns `kNotSupported` without sending until `ReconnectConfigApi()`. A v1.0.x sensor runs some v1.1.0 requests, such as Restart, ResetAllSettings, FirmwareSwitchSlot and FirmwareUpdateReboot, even though it cannot parse them.
-- `GetInterfaceGeneration()` returns the generation from that request, else from the last stream frame that passed the E2E check, else `kUnknown`.
+- `GetInterfaceGeneration()` returns the generation from that request, else from the last stream frame that passed the E2E check, else `kUnknown`. When the request reports `kV1_1` and a stream frame reports `kV1_2`, it returns `kV1_2`: the E2E header cannot tell v1.1.0 from v1.2.0, and the RDI framing can.
 
 - `GetLastSensorResult()` returns the sensor's outcome of the last Config API call: return code and name (for example `SESSION_REQUIRED`), `data.error_message` (firmware update methods) and the response E2E verdict. `return_code` is `-1` when no response arrived.
 - `ReconnectConfigApi()` reconnects to the remembered endpoint, retrying every 500 ms until `timeout_ms`. It returns `kOk`, `kNotInitialized`, or `kConnectFailed` after the timeout. Use it after `Restart()` or `FirmwareUpdateReboot()`.
 
 Transport behaviour:
 
-- A response must answer its request: same Message ID, Client ID and Session ID, protocol and interface version `0x01`, RESPONSE message type, and room for the E2E header. Anything else is `kProtocolError`.
+- A response must answer its request: same Message ID, Client ID and Session ID, protocol and interface version `0x01`, RESPONSE (`0x80`) or ERROR (`0x81`) message type, and room for the E2E header. Anything else is `kProtocolError`.
 - Any timeout, lost connection or mismatched response closes the socket, so a late reply cannot be read as the answer to the next request. The next call reconnects to the remembered endpoint. A connect that fails at `Init()` is retried the same way.
 - `request_timeout_ms` bounds each response and `connect_timeout_ms` each connect.
 - Request bodies above 16,384 bytes are refused before sending with `kInvalidParam`. The sensor closes the connection without a reply for such a request.
@@ -433,7 +433,7 @@ Caller's thread       →  Config API calls (synchronous)
 
 ### Callback Data Lifetime
 
-The frame or message reference passed to a callback is valid only during the callback. `AfiRdiFrame` owns its detection vector: its copy and move operations carry `message`, `recv_timestamp_ns`, `frame_seq` and `detections_storage`, and rebind `message.detections` to the destination's storage.
+The frame or message reference passed to a callback is valid only during the callback. `AfiRdiFrame` owns its detection vector: its copy and move operations carry every member (`message`, `recv_timestamp_ns`, `frame_seq`, `detections_storage`, the E2E verdict, `generation` and the chunk counts) and rebind `message.detections` to the destination's storage.
 
 ---
 
@@ -505,7 +505,7 @@ Call `RebindStorage()` after resizing or replacing `detections_storage` directly
 | `relative_velocity_radial` | `float` | Radial velocity (m/s) |
 | `relative_velocity_radial_error` | `float` | Radial velocity error (m/s) |
 
-An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 detections** (FW v3.1.1 and v3.1.2 send at most 2048). The ambiguity domain covers radial velocity only (`radial_velocity_begin` / `radial_velocity_end`).
+An RDI payload is a 36-byte header plus 51 bytes per detection, up to **8192 detections** in the single-message format of interface v1.1.0 and v1.0.x and at most 2048 per interface v1.2.0 scan (FW v3.1.1 and v3.1.2 send at most 2048). The ambiguity domain covers radial velocity only (`radial_velocity_begin` / `radial_velocity_end`).
 
 ### `AfiShiMessage` / `AfiSpiMessage` / `AfiStreamMeta`
 
@@ -897,7 +897,7 @@ const char* AfiErrorStr(int code);
 | -7 | `kProtocolError` | Response does not answer the request, or its content is malformed | Check firmware compatibility |
 | -8 | `kSensorError` | Other sensor return code (e.g. `INTERNAL_ERROR`) | Check `GetLastSensorResult()` |
 | -9 | `kInternalError` | Internal SDK error | Report a bug |
-| -10 | `kNotSupported` | Sensor `NOT_SUPPORTED` (method absent on this image or reserved) | Check the firmware image |
+| -10 | `kNotSupported` | Sensor `NOT_SUPPORTED` (method absent on this image or reserved), or any Config API call to an interface v1.0.x sensor (nothing sent) | Check the firmware image; check `GetInterfaceGeneration()` for `kV1_0` |
 | -11 | `kBusy` | Sensor `BUSY`: more than 200 requests per second, a `GetFaultLog` flash job in progress, or an NVM write within 3,000 ms of boot | Slow down, or retry |
 | -12 | `kSessionRequired` | Sensor `SESSION_REQUIRED`: method not open in the current access mode | `EnterMode()` and retry |
 | -13 | `kAccessDenied` | Sensor `ACCESS_DENIED`: mode re-entry or a step back from Programming | Reboot when leaving Programming |
@@ -1028,7 +1028,7 @@ Sends one CSII message to `csii_port` (Event `0x8001`): one UDP datagram on inte
 
 | Method | Returns |
 |--------|---------|
-| `get_device_info()` | `{serial_number, mac_address, vlan_id, model_name, hw_version, software_version, bootloader_hash, fw_hash}` |
+| `get_device_info()` | `{serial_number, mac_address, vlan_id, model_name, hw_version, software_version, bootloader_hash, fw_hash, if_version}` (`if_version` from interface v1.2.0) |
 | `get_sensor_status()` | `{operation_state, operation_state_code, temperature_mcu, temperature_rf, voltage, uptime_sec}` |
 | `get_diagnostic_info()` | `{combined_state, combined_state_code, max_fault_level, max_fault_level_code, trigger_fault_id, active_fault_count, status_snapshot_stale, status_stale_cycles, faults[]}` |
 | `restart()` | `int`; the connection drops after the reply |
@@ -1166,10 +1166,10 @@ if result.ok and result.rebooted:
 1. `enter_mode(AccessMode.PROGRAMMING)`, through Diagnostic. Data streams stop until the reboot.
 2. Bootloader, when given: `upload_component("bootloader", "bootloader", ...)`.
 3. Firmware, when given: reads the active face from `get_boot_info()`, uploads `m7_0`, `m7_1`, `m7_2`, `a53` in that order, and checks that each start names the inactive face as `target_slot`. When the sensor moved the active marker at a commit, the module switches it back before the next component so that all four land on the same face.
-4. One `firmware_switch_slot("firmware")` after every commit reached idle, a wait for idle, and a Boot-Info check that the written face is active.
+4. After every commit reached idle, one `firmware_switch_slot("firmware")` and a wait for idle when the written face is not already active, then a Boot-Info check that the written face is active.
 5. With `reboot=True`, `firmware_update_reboot()`, sent while the session is idle. A lost connection or a timeout on this call counts as accepted.
 
-Chunks use the `max_chunk_size` from the start answer (4096 when absent) and resume at `received_bytes`; 200 consecutive chunks without progress abort the component.
+Chunks use the `max_chunk_size` from the start answer (4096 when absent) and resume at `received_bytes`; more than 200 consecutive chunks without progress abort the component.
 
 | Type | Fields |
 |------|--------|

@@ -151,7 +151,7 @@ public:
      * @brief Send vehicle dynamics to the sensor (CSII stream)
      *
      * Publishes one CSII message (Event 0x8001) to the sensor's port 30501
-     * with the 20B E2E header (CRC-32): one UDP datagram on interface v1.1.0,
+     * with the 20B E2E header (CRC-32): one UDP datagram on interface v1.1.0 and later,
      * over a TCP connection on v1.0.x (AfiSdkConfig::csii_transport). Call
      * cyclically (100 ms recommended); the SDK maintains the message/E2E
      * counters and creates the socket on first use.
@@ -194,8 +194,10 @@ public:
      *
      * From the GetDeviceInfo probe that opens each Config API connection,
      * else from the last stream frame that passed the E2E check; kUnknown
-     * before either. On kV1_0 every Config API call returns kNotSupported
-     * without sending, while RDI, SHII, SPI and CSII work as on kV1_1.
+     * before either. A probe result kV1_1 yields to a stream frame of kV1_2,
+     * because the E2E header cannot tell v1.1.0 from v1.2.0. On kV1_0 every
+     * Config API call returns kNotSupported without sending; RDI, SHII and
+     * SPI are received with the CRC-64/XZ check and CSII is sent over TCP.
      */
     AfiInterfaceGeneration GetInterfaceGeneration() const;
 

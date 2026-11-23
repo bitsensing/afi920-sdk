@@ -4,7 +4,7 @@
  *
  * Host -> Radar direction. The host publishes vehicle state, sensor operation
  * command, and environmental time every 100ms; the radar stores the received
- * record only (docs/04_CSII_Sensor_Input.md).
+ * record only (CSII specification).
  *
  * Wire format: 79 bytes fixed (NumberOfValidServingSensors = 1 by convention).
  * Endianness: little-endian payload (ARM native).

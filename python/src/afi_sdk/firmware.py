@@ -1,5 +1,5 @@
 """
-Firmware update sequence for one AFI920 radar (interface v1.1.0).
+Firmware update sequence for one AFI920 radar (interface v1.1.0 and later).
 
 07_Firmware_Update and 11_Access_Mode fix the order, so it is protocol
 knowledge rather than caller policy:

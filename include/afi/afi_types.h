@@ -229,7 +229,7 @@ inline const char* AfiRangeModeName(AfiRangeMode mode) {
  * @brief Vehicle input (CSII) - host-provided vehicle dynamics
  *
  * Sent to the sensor's port 30501 (Event 0x8001), typically every 100 ms:
- * one UDP datagram on interface v1.1.0, a TCP stream on v1.0.x.
+ * one UDP datagram on interface v1.1.0 and later, a TCP stream on v1.0.x.
  * The SDK fills the interface header (timestamp, counter) automatically;
  * set timestamp_ns to override the measurement timestamp (0 = host clock).
  */
@@ -613,7 +613,7 @@ struct AfiResetConfigDefaultsResult {
 // Category 11: Access Mode (0x00Ex)
 
 /**
- * @brief Config API access mode (interface v1.1.0, 11_Access_Mode)
+ * @brief Config API access mode (interface v1.1.0 and later, 11_Access_Mode)
  *
  * Entry is one way, Normal -> Diagnostic -> Programming, and only a reboot
  * returns to Normal. Diagnostic opens every config SET; Programming opens the

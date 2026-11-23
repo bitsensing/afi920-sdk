@@ -4,9 +4,9 @@ AFI920 SOME/IP Client Library
 Lightweight Python helper for AFI920 sensor communication.
 Provides Config API (TCP) and Discovery (UDP) over SOME/IP protocol.
 
-Interface v1.1.0: Config API requests and responses carry the 20B E2E header
-(CRC-32 over the JSON body, Data ID 0x6000 << 16 | Method ID). Discovery has
-no E2E header.
+Interface v1.1.0 and later: Config API requests and responses carry the 20B
+E2E header (CRC-32 over the JSON body, Data ID 0x6000 << 16 | Method ID).
+Discovery has no E2E header.
 
 Dependencies: Python 3.8+ (stdlib only, no external packages required)
 
@@ -41,7 +41,7 @@ SOMEIP_HEADER_SIZE = 16
 E2E_HEADER_FMT = ">IIIII"   # CRC high, CRC-32, Length, Counter, Data ID
 E2E_HEADER_SIZE = 20
 
-# ── Config API Method IDs (interface v1.1.0 registry) ──
+# ── Config API Method IDs (interface v1.1.0 and later) ──
 
 # Device Info & Status (0x001x)
 METHOD_GET_DEVICE_INFO          = 0x0010
@@ -108,7 +108,7 @@ METHOD_DISCOVERY_RESPONSE       = 0x00C1
 
 # ── Data Stream Event IDs ──
 
-EVENT_CSII     = 0x8001   # Host -> Radar (UDP on v1.1.0, TCP on v1.0.x)
+EVENT_CSII     = 0x8001   # Host -> Radar (UDP on v1.1.0 and later, TCP on v1.0.x)
 EVENT_RDI      = 0x8002   # v1.2.0: RDI header A and header B
 EVENT_RDI_CHUNK_BASE = 0x8100   # v1.2.0: RDI chunk k = base + k (k = 0..75)
 RDI_MAX_CHUNKS = 76
@@ -214,7 +214,7 @@ RANGE_MODE_NAMES = {0: "DR", 1: "LR", 2: "MR", 3: "SR", 4: "ULR", 5: "USR",
 
 
 class ConfigClient:
-    """SOME/IP Config API client over TCP (interface v1.1.0).
+    """SOME/IP Config API client over TCP (interface v1.1.0 and later).
 
     Every request and response carries the 20B E2E header. A response whose
     E2E check fails is logged and still returned; ``last_response_e2e["ok"]``

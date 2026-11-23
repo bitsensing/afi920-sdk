@@ -2,7 +2,7 @@
  * @file bts_iso23150_e2e.h
  * @brief E2E communication protection header (20B, CRC-32)
  *
- * Authoritative spec: Interface Overview section 3.2 (docs/00_Interface_Overview.md)
+ * Authoritative spec: Interface Overview section 3.2
  *
  * Scope: RDI / SHII / SPI / CSII / Config API.
  * Excluded: Discovery (UDP 30520), which carries no E2E header.
